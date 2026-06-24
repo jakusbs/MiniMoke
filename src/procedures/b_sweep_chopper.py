@@ -428,6 +428,15 @@ class B_Sweep_Lockin(Procedure):
             if self.should_stop():
                 break
 
+        # If the run was aborted, skip the (potentially long) post-processing and
+        # averaged emit so the abort returns promptly instead of grinding through
+        # every field point first.  This also avoids dividing by zero when the
+        # abort happens before a single sweep completes.
+        if self.should_stop():
+            log.info("Aborted — skipping final averaged hysteresis loop.")
+            meas.shutdown()
+            return
+
         # ── Final emit: averaged hysteresis loop ──────────────────────────────
         n = self._sweeps_completed
         log.info(f"Emitting final averaged hysteresis loop ({n} sweeps)...")

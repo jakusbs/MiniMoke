@@ -217,8 +217,13 @@ class XY_Sweep(Procedure):
         """
         log.info("Aquisition done, turning off the outputs")
         try:
-            stage.move_x_to(self.x_min)
-            stage.move_y_to(self.y_min)
+            # On abort, stop where we are: the move back to the start is long and
+            # not abortable, and running it here is the main reason an abort can
+            # appear to hang the app (pymeasure only finishes the abort once
+            # shutdown() returns).  The field is still switched off below.
+            if not self.should_stop():
+                stage.move_x_to(self.x_min)
+                stage.move_y_to(self.y_min)
             dac.set_outputs_and_reset([0., 0., 0.])
             hall_sensor.set_aquisition_time(0.5)
         finally:

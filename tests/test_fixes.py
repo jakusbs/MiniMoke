@@ -427,6 +427,58 @@ def test_motor_click_queue_applies_every_click():
     assert tab._queue == [], "queue not drained"
 
 
+def test_b_sweep_abort_skips_final_average():
+    """Aborting must skip the long post-loop averaging so the abort returns
+    promptly (and not divide by zero when no sweep completed)."""
+    import src.procedures.b_sweep_proc as bsp
+    _patch_proc_module(bsp, hall_val=10.0)
+
+    p = bsp.B_Sweep()
+    p.set_sample_name("t")
+    p.b_min, p.b_max, p.b_step = -0.02, 0.02, 0.01
+    p.sweep_freq = 50.0
+    p.num_sweeps = 5
+    p.should_stop = lambda: True            # aborted from the very start
+
+    records = []
+    p.emit = lambda topic, rec=None, **k: records.append((topic, rec))
+
+    p.startup()
+    p.execute()
+
+    # The averaged emit is the only one with Voltage DC (V)=NaN — none must appear.
+    averaged = [r for t, r in records
+                if t == "results" and isinstance(r.get("Voltage DC (V)"), float)
+                and np.isnan(r["Voltage DC (V)"])]
+    assert averaged == [], "final averaged loop was emitted despite abort"
+
+
+def test_x_sweep_shutdown_skips_moveback_on_abort():
+    """shutdown() must skip the long move-back to start when aborted, but still
+    do it on a normal finish.  The non-abortable move-back is the main reason an
+    abort could appear to hang the whole app."""
+    import src.procedures.x_sweep_proc as xsp
+    fakes = _patch_proc_module(xsp)
+
+    moves = []
+    fakes["stage"].move_x_to = lambda v: moves.append(("x", v))
+    fakes["stage"].move_y_to = lambda v: moves.append(("y", v))
+
+    p = xsp.X_Sweep()
+    p.set_sample_name("t")
+    p.x_min, p.x_max, p.y = -0.02, 0.02, 0.0
+
+    p.should_stop = lambda: True            # aborted -> no move-back
+    p.shutdown()
+    assert moves == [], f"stage moved back to start despite abort: {moves}"
+
+    moves.clear()
+    p.should_stop = lambda: False           # normal finish -> move back
+    p.shutdown()
+    assert ("x", p.x_min) in moves and ("y", p.y) in moves, \
+        f"normal finish should move back to start: {moves}"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

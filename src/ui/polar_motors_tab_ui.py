@@ -23,8 +23,11 @@ from pymeasure.display.widgets import TabWidget
 from src.classes import polar_stage as stage
 from src.classes import active_stage       # for the shared hw_lock
 
-STEPS         = [10.0,  1.0,  0.1,   0.01,  0.001]
-STEP_DECIMALS = [-1,    0,    1,     2,     3]
+# Jog step sizes (mm) and the matching decimal place of each odometer digit.
+# 0.00001 mm = 0.01 um (10 nm) is the finest jog/display, matching the
+# longitudinal tab.
+STEPS         = [10.0,  1.0,  0.1,   0.01,  0.001,  0.0001,  0.00001]
+STEP_DECIMALS = [-1,    0,    1,     2,     3,      4,       5]
 
 # UI sizing constants — tweak here to resize all motor controls at once
 _BTN_W, _BTN_H     = 24, 16   # step ▲/▼ button size (px)
@@ -178,7 +181,9 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     def __init__(self, name, parent=None):
         super().__init__(parent)
         self.name = name
-        self._worker = None   # keep reference so it isn't GC'd mid-move
+        self._worker = None        # keep reference so it isn't GC'd mid-move
+        self._queue = []           # pending jog/move requests (FIFO)
+        self._WORKER_CLS = _MoveWorker   # injectable for testing
         self._build()
 
     def _build(self):
@@ -284,16 +289,31 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def _dispatch(self, fn, *args):
-        """Run fn(*args) in a background thread; refresh display when done.
+        """Queue fn(*args) to run in a background thread, refreshing the display
+        when each move finishes.
 
-        Drops the request if a move is already running, preventing command
-        queuing while a motor is in motion.
+        Requests are queued FIFO and executed one at a time, so rapid clicks on
+        the jog arrows are never dropped — every click is applied, in order.
+        (Previously a click was silently discarded if a move was still running.)
         """
+        self._queue.append((fn, args))
+        self._maybe_start_next()
+
+    def _maybe_start_next(self):
+        """Start the next queued move if none is currently running."""
         if self._worker is not None and self._worker.isRunning():
             return
-        self._worker = _MoveWorker(fn, *args)
-        self._worker.finished.connect(self._safe_update_positions)
+        if not self._queue:
+            return
+        fn, args = self._queue.pop(0)
+        self._worker = self._WORKER_CLS(fn, *args)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
+
+    def _on_worker_finished(self):
+        """Refresh the readout, then run the next queued move (if any)."""
+        self._safe_update_positions()
+        self._maybe_start_next()
 
     def move_x(self, d): self._dispatch(stage.move_x, d)
     def move_y(self, d): self._dispatch(stage.move_y, d)

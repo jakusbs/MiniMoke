@@ -197,9 +197,13 @@ class Y_Sweep(Procedure):
         Define the tasks to do at the procedure's end
         """
         log.info("Aquisition done, turning off the outputs")
-        stage.move_x_to(self.x)
-        stage.move_y_to(self.y_min)
-        dac.set_outputs_and_reset([0., 0., 0.])
-        hall_sensor.set_aquisition_time(0.5)
-        dac.reserved         = False
-        hall_sensor.reserved = False
+        try:
+            stage.move_x_to(self.x)
+            stage.move_y_to(self.y_min)
+            dac.set_outputs_and_reset([0., 0., 0.])
+            hall_sensor.set_aquisition_time(0.5)
+        finally:
+            # Always release the hardware so the live tab resumes, even if a
+            # teardown call above raised.
+            dac.reserved         = False
+            hall_sensor.reserved = False

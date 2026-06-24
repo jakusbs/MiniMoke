@@ -360,6 +360,73 @@ def test_motor_odometer_no_phantom_jumps():
             assert abs(shown_mm(mm) - mm) < 5e-4, f"{mod.__name__}: negative {mm} mis-displayed"
 
 
+def test_procedure_shutdown_always_releases_hardware():
+    """If a teardown call raises, shutdown must still clear the reserved flags
+    so the live tab resumes (the cause of 'live didn't restart after a scan')."""
+    import src.procedures.b_sweep_proc as bsp
+    fakes = _patch_proc_module(bsp)
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated DAQ teardown failure")
+
+    fakes["dac"].set_outputs_and_reset = boom
+    fakes["dac"].reserved = True
+    fakes["hall_sensor"].reserved = True
+
+    p = bsp.B_Sweep()
+    p.set_sample_name("t")
+    try:
+        p.shutdown()
+    except RuntimeError:
+        pass   # error may propagate, but the flags must already be cleared
+
+    assert fakes["dac"].reserved is False, "DAC stayed reserved -> live tab frozen"
+    assert fakes["hall_sensor"].reserved is False, "Hall stayed reserved -> live tab frozen"
+
+
+def test_motor_click_queue_applies_every_click():
+    """Rapid jog clicks must all execute in order (none dropped while moving)."""
+    from PyQt5.QtCore import QObject, pyqtSignal
+    from src.ui import longitudinal_motors_tab_ui as L
+
+    executed = []
+
+    class FakeWorker(QObject):
+        finished = pyqtSignal()
+        instances = []
+        def __init__(self, fn, *args):
+            super().__init__()
+            self._fn, self._args, self._running = fn, args, False
+            FakeWorker.instances.append(self)
+        def isRunning(self): return self._running
+        def start(self): self._running = True          # do NOT auto-complete
+        def complete(self):
+            self._fn(*self._args)
+            self._running = False
+            self.finished.emit()
+
+    tab = L.LongitudinalMotorsTab("test")
+    tab._safe_update_positions = lambda: None           # don't touch hardware
+    FakeWorker.instances.clear()
+    tab._WORKER_CLS = FakeWorker
+
+    def rec(label): executed.append(label)
+
+    tab._dispatch(rec, "a")     # first starts immediately
+    tab._dispatch(rec, "b")     # a still running -> queued
+    tab._dispatch(rec, "c")     # queued
+    assert len(FakeWorker.instances) == 1 and executed == []
+
+    FakeWorker.instances[0].complete()   # a done -> b starts
+    assert executed == ["a"] and len(FakeWorker.instances) == 2
+    FakeWorker.instances[1].complete()   # b done -> c starts
+    assert executed == ["a", "b"] and len(FakeWorker.instances) == 3
+    FakeWorker.instances[2].complete()   # c done
+
+    assert executed == ["a", "b", "c"], "a rapid click was dropped"
+    assert tab._queue == [], "queue not drained"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

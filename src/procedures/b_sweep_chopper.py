@@ -502,7 +502,11 @@ class B_Sweep_Lockin(Procedure):
     def shutdown(self):
         """Return hardware to a safe idle state."""
         log.info("Acquisition done — turning off outputs.")
-        dac.set_outputs_and_reset([0.0, 0.0, 0.0])
-        hall_sensor.set_aquisition_time(0.5)
-        dac.reserved         = False
-        hall_sensor.reserved = False
+        try:
+            dac.set_outputs_and_reset([0.0, 0.0, 0.0])
+            hall_sensor.set_aquisition_time(0.5)
+        finally:
+            # Always release the hardware so the live tab resumes, even if a
+            # teardown call above raised.
+            dac.reserved         = False
+            hall_sensor.reserved = False

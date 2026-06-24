@@ -133,6 +133,12 @@ class XY_Sweep(Procedure):
         dac.setup_aquisition(modulation_channel=self.demod, frequency=self.freq,
                              acquisition_time=self.acq_time, sampling_rate=self.rate,
                              modulation_amp=self.mod_amp)
+        # This scan reads the lock-in's first-harmonic outputs
+        # (meas.x1/y1/mag1/theta1), which are only valid in dual-harmonic
+        # reference mode.  Set it explicitly so the run never depends on whatever
+        # mode the instrument was last left in (otherwise those reads return an
+        # empty string and raise mid-sweep).
+        dsp.set_reference_mode(1)
         dsp.setup_lockin_condition(lockin_voltage=self.volt, lockin_sensitivity=self.sensi,
                                    lockin_frequency=self.lockin_freq,
                                    lockin_time_constant=self.time_const, lockin_phase=self.phase)

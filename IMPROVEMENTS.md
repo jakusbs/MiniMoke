@@ -1,0 +1,51 @@
+# Future improvements (acquisition & instrumentation)
+
+A short, honest backlog of technical improvements discussed during the
+bug-fix pass. Items here are **deferred by choice** — they are not bugs, and the
+software works without them. Each notes *why* it's deferred so the context isn't
+lost.
+
+## Done in this pass
+- **Single lock-in session.** `meas` and `dsp` now refer to one `Ametek7270`
+  instance (was two VISA sessions to the same instrument).
+- **Explicit lock-in reference mode.** X/Y/XY sweeps select dual-harmonic mode
+  in `startup()` before reading `x1/y1/mag1/theta1`, so a run no longer depends
+  on whatever mode the instrument was last left in.
+
+## Deferred — hardware-dependent
+- **Continuous field ramp + streaming acquisition.**
+  Replacing the step-and-settle staircase with a continuously clocked triangle
+  field ramp and a streamed AI acquisition would give faster, smoother
+  hysteresis loops with no per-point settle dead-time.
+  *Blocked by hardware:* the Hall probe is currently read over **USB**, not the
+  DAQ card, so the field readback and the streamed samples cannot be
+  time-aligned (the USB latency mismatch is too large). Revisit once the Hall
+  probe is wired to the DAQ via **BNC** — then the field can be sampled on the
+  same clock as the diode signal and binned/aligned exactly. Until then,
+  ramp-and-wait is the correct choice.
+
+## Deferred — considered and declined
+- **Intensity normalization (balanced ÷ intensity).** Declined: for this
+  balanced detector the intensity diode mainly tracks spot size/defocus rather
+  than common-mode laser power, so dividing by it would not cleanly reject
+  power drift (and could add noise) until defocus becomes large.
+- **Software (digital) lock-in.** Declined: AC measurements use the hardware
+  Ametek 7270, and DC loops run with no modulation, so an in-software
+  demodulator isn't needed. (The unused, result-discarded demodulation that used
+  to run every point in X/Y/XY was removed.)
+- **Raw-waveform saving.** Declined: not needed for the current workflow.
+
+## Optional, low-risk (not yet done)
+- **NPLC (mains-cycle) DC averaging.** Snapping the per-point acquisition window
+  to an integer number of 50 Hz line cycles (multiples of 20 ms) makes mains
+  pickup average to ~zero. Trade-off: it imposes a ≥20 ms/point floor, which
+  conflicts with fast DC sweeps — so it's best offered as an opt-in for careful,
+  slow measurements rather than always on.
+- **Per-point error handling.** Record `NaN` and continue on a transient
+  instrument read error instead of aborting the whole sweep.
+- **De-duplicate X/Y/XY procedures.** They are ~90% identical; a shared base (or
+  one parametrized sweep) would remove a class of copy-paste bugs (the XY
+  progress bug came from exactly this divergence).
+- **Faster lock-in readout.** Reading `x1,y1,mag1,theta1` is four VISA queries
+  per point; the 7270 can return several values per command, or its internal
+  curve buffer can be armed once and dumped at the end of a sweep.

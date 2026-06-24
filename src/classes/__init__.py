@@ -35,7 +35,10 @@ def _make_lockin():
 
 
 meas = _make_lockin()
-dsp  = _make_lockin()
+# `meas` and `dsp` are the SAME physical Ametek 7270.  Opening two driver
+# instances (two VISA sessions) to one instrument risks intermittent conflicts,
+# so `dsp` is just an alias used by the configuration calls.
+dsp  = meas
 
 log.setLevel(logging.INFO)
 

@@ -479,6 +479,30 @@ def test_x_sweep_shutdown_skips_moveback_on_abort():
         f"normal finish should move back to start: {moves}"
 
 
+def test_single_lockin_instance():
+    """meas and dsp must be the same object — one VISA session to one box."""
+    assert C.meas is C.dsp, "meas and dsp are separate driver sessions to one instrument"
+
+
+def test_x_sweep_sets_lockin_reference_mode_in_startup():
+    """X/Y/XY read first-harmonic outputs, so startup must select dual-harmonic
+    reference mode (1); otherwise those reads return '' and raise mid-sweep."""
+    import src.procedures.x_sweep_proc as xsp
+    fakes = _patch_proc_module(xsp)
+
+    calls = []
+    fakes["dsp"].set_reference_mode = lambda mode=0: calls.append(mode)
+
+    p = xsp.X_Sweep()
+    p.set_sample_name("t")
+    p.demod = "None"
+    p.acq_time = 0.001
+    p.b = 0.0
+    p.startup()
+
+    assert 1 in calls, f"dual-harmonic reference mode not set in startup: {calls}"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

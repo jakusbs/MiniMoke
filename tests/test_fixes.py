@@ -300,6 +300,31 @@ def test_xy_sweep_progress_monotonic_and_bounded():
     assert progs == sorted(progs), "progress is not monotonically increasing"
 
 
+def test_longitudinal_y_jog_matches_readout_direction():
+    """A +mm relative jog must step every axis the same sign (Y was inverted)."""
+    s = LongitudinalStage.__new__(LongitudinalStage)   # bypass hardware __init__
+    s.enabled = True
+    s.mm2steps = 1000.0
+    recorded = {}
+
+    class FakeMotor:
+        def __init__(self, key): self.key = key
+        def is_moving(self): return False
+        def move_by(self, steps, scale=True): recorded[self.key] = steps
+        def wait_move(self): pass
+
+    s.motor_x, s.motor_y, s.motor_z = FakeMotor("x"), FakeMotor("y"), FakeMotor("z")
+    s.move_x(1.0)
+    s.move_y(1.0)
+    s.move_z(1.0)
+
+    assert recorded["x"] > 0
+    assert recorded["z"] > 0
+    assert recorded["y"] > 0, "Y jog still inverted relative to X/Z and the readout"
+    # And a +mm jog on Y matches X in both sign and magnitude.
+    assert recorded["y"] == recorded["x"]
+
+
 def test_motor_odometer_no_phantom_jumps():
     """The motor-control odometer must step by exactly 1 um per 1 um move.
 

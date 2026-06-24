@@ -107,7 +107,10 @@ class LongitudinalStage:
             mm (float): The distance to move in millimeters.
         """
         if self.enabled and not self.motor_y.is_moving():
-            self.motor_y.move_by(-mm * self.mm2steps, scale=False)
+            # Positive mm increases the Y readout, matching move_y_to()/get_y_pos()
+            # and the X/Z axes.  (Previously this used -mm, so the jog arrows moved
+            # Y opposite to the position readout.)
+            self.motor_y.move_by(mm * self.mm2steps, scale=False)
             self.motor_y.wait_move()
 
     def move_z(self, mm) -> None:

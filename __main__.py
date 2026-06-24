@@ -36,8 +36,13 @@ else:
 dll_dir = os.path.join(base_dir, "libs")
 
 if os.path.exists(dll_dir):
-    os.add_dll_directory(dll_dir)
-    print(f"Added DLL directory: {dll_dir}")
+    # os.add_dll_directory only exists on Windows (Python 3.8+).  Guard it so
+    # the entry point doesn't raise AttributeError on other platforms.
+    if hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(dll_dir)
+        print(f"Added DLL directory: {dll_dir}")
+    else:
+        print(f"DLL directory found (non-Windows, not registered): {dll_dir}")
 else:
     print(f"Warning: DLL directory not found at {dll_dir}")
 

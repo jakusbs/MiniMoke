@@ -311,8 +311,10 @@ class UIWindowBase(QtWidgets.QMainWindow):
         footer_vbox.addWidget(self.setup_toggle_widget)
         footer_vbox.addWidget(self.repetitions_label)
         footer_vbox.addWidget(self.repetitions_line)
-        footer_vbox.addWidget(self.directory_label)
-        footer_vbox.addWidget(self.directory_line)
+        # directory_label / directory_line only exist when directory_input=True
+        if self.directory_input:
+            footer_vbox.addWidget(self.directory_label)
+            footer_vbox.addWidget(self.directory_line)
 
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(self.queue_button)

@@ -432,21 +432,30 @@ class B_Sweep_Lockin(Procedure):
         n = self._sweeps_completed
         log.info(f"Emitting final averaged hysteresis loop ({n} sweeps)...")
 
-        if not self._hall_live:
+        if self._hall_live:
+            # _fwd_b_sum / _bwd_b_sum accumulated one reading per sweep, so the
+            # per-point mean is the sum divided by the number of sweeps.
+            fwd_b_avg = self._fwd_b_sum / n
+            bwd_b_avg = self._bwd_b_sum / n
+        else:
             # Fast mode: collect one slow hall read per set-point now that we're
-            # off the sweep clock.
+            # off the sweep clock.  It is a single measurement, so it must NOT
+            # be divided by num_sweeps.
             log.info("Fast mode: performing slow hall reads for averaged result...")
             hall_sensor.set_aquisition_time(HALL_MIN_ACQ_S)
+
+            fwd_b_avg = np.zeros(n_fwd)
+            bwd_b_avg = np.zeros(n_bwd)
 
             for i, b_set in enumerate(self.b_forward):
                 dac.coils_output = b_set
                 time.sleep(HALL_MIN_ACQ_S * 2)
-                self._fwd_b_sum[i] = hall_sensor.read_mT()
+                fwd_b_avg[i] = hall_sensor.read_mT()
 
             for j, b_set in enumerate(self.b_backward[1:]):
                 dac.coils_output = b_set
                 time.sleep(HALL_MIN_ACQ_S * 2)
-                self._bwd_b_sum[j] = hall_sensor.read_mT()
+                bwd_b_avg[j] = hall_sensor.read_mT()
 
         # Emit forward branch
         for i, b_set in enumerate(self.b_forward):
@@ -455,7 +464,7 @@ class B_Sweep_Lockin(Procedure):
                 "X Position (m)":         x_pos / 1000.0,
                 "Y Position (m)":         y_pos / 1000.0,
                 "Magnetic Field (A)":     b_set,
-                "Magnetic Field (T)":     self._fwd_b_sum[i] / n / 1000.0,
+                "Magnetic Field (T)":     fwd_b_avg[i] / 1000.0,
                 "Voltage X 1f (V)":       float("nan"),
                 "Voltage Y 1f (V)":       float("nan"),
                 "Voltage R 1f (V)":       float("nan"),
@@ -474,7 +483,7 @@ class B_Sweep_Lockin(Procedure):
                 "X Position (m)":         x_pos / 1000.0,
                 "Y Position (m)":         y_pos / 1000.0,
                 "Magnetic Field (A)":     b_set,
-                "Magnetic Field (T)":     self._bwd_b_sum[j] / n / 1000.0,
+                "Magnetic Field (T)":     bwd_b_avg[j] / 1000.0,
                 "Voltage X 1f (V)":       float("nan"),
                 "Voltage Y 1f (V)":       float("nan"),
                 "Voltage R 1f (V)":       float("nan"),

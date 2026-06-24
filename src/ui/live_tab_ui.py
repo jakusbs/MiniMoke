@@ -39,7 +39,7 @@ class VoltageThread(QThread):
         while True:
             if not dac.reserved:
                 if not dac.status_setup:
-                    dac.setup_aquisition(acquisition_time=0.5, modulation_amp=[0.,0.])
+                    dac.setup_aquisition(acquisition_time=0.5, modulation_amp=0.)
                 dac.start_tasks()
                 balanced_diodes_data, intensity_diode_data = dac.read_data()
 

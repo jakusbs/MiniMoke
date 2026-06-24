@@ -80,9 +80,9 @@ class LongitudinalStage:
         Wait for the stage motors to reach a stable position.
         """
         if self.enabled:
-            self.motor_x.wait_move
-            self.motor_y.wait_move
-            self.motor_z.wait_move
+            self.motor_x.wait_move()
+            self.motor_y.wait_move()
+            self.motor_z.wait_move()
 
     #################################################################
     # MOVE MOTORS BY A NUMBER OF STEPS

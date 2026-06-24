@@ -13,9 +13,15 @@ DLL_working = False
 
 try:
     import clr
-    # Use a raw string for the path to avoid escape character issues
-    dll_path = r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll'
-    
+    # Resolve the DLL relative to the repository's libs/ folder so it works
+    # regardless of the install path / Windows username (the previous hardcoded
+    # path did not even match the username used in scripts/debug.bat).  Fall
+    # back to the historical absolute path if the relative one is missing.
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dll_path = os.path.join(_repo_root, "libs", "MagnetPhysik.Usb.dll")
+    if not os.path.exists(dll_path):
+        dll_path = r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll'
+
     if os.path.exists(dll_path):
         clr.AddReference(dll_path)
         import MagnetPhysik as MP
@@ -67,11 +73,14 @@ class HallSensor:
         Read the magnetic field value measured by the sensor in millitesla (mT) and return it.
 
         Returns:
-            float or None: The measured magnetic field value in mT, or None if an error occurred.
+            float or None: The measured magnetic field value in mT.  Returns
+            0.0 when the sensor is disabled (no hardware) so that callers which
+            divide/scale the reading degrade gracefully like the DAC does, and
+            None only if an actual read error occurred.
         """
         sleep(self.aquisition_time)
 
-        if not self.enabled: return
+        if not self.enabled: return 0.0
 
         try:
             return self.hall_sensor.get_Tesla() * 1000.

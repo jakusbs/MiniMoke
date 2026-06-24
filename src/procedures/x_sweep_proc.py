@@ -152,15 +152,11 @@ class X_Sweep(Procedure):
                 balanced_diodes_data, intensity_diode_data = dac.read_data()
                 balanced_diodes_DC = np.mean(balanced_diodes_data)
 
-                # Demodulate the signal if there is a modulation
-                if self.demod != 'None':
-                    balanced_diodes_1f = dac.demodulation(balanced_diodes_data, dac.reference_signal_1f,
-                                                          offset=balanced_diodes_DC, bandwith=self.lockin_bw, order=3.)
-                    balanced_diodes_2f = dac.demodulation(balanced_diodes_data, dac.reference_signal_2f,
-                                                          offset=balanced_diodes_DC, bandwith=self.lockin_bw, order=3.)
-                else:
-                    balanced_diodes_1f = {"X": 0, "Y": 0, "R": 0, "theta": 0}
-                    balanced_diodes_2f = {"X": 0, "Y": 0, "R": 0, "theta": 0}
+                # The 1f MOKE signal columns are read directly from the lock-in
+                # amplifier (meas.x1/y1/mag1/theta1) below.  The software
+                # demodulation that used to run here was computed but never used
+                # (its result was discarded), so it has been removed to avoid the
+                # dead per-point filtfilt cost.
 
                 data = {
                     'Iteration':            i,

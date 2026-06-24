@@ -65,9 +65,17 @@ def set_active_stage(mode: str) -> None:
 # can never talk to the serial port simultaneously.
 # ---------------------------------------------------------------------------
 
-@property
-def enabled() -> bool:
-    return _active.enabled
+def __getattr__(name: str):
+    """Forward attributes not explicitly defined here (e.g. ``enabled``) to the
+    currently active stage.
+
+    A module-level ``@property`` does *not* work — accessing it would return the
+    property object itself, not its value — so ``active_stage.enabled`` is
+    served here instead, always reflecting the live stage.
+    """
+    if name == "enabled":
+        return _active.enabled
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def move_x(mm: float) -> None:

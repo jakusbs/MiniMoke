@@ -144,11 +144,13 @@ class XY_Sweep(Procedure):
         """
         log.info("Aquisition...")
         count_b = -1
-        count_x = -1
+
+        # Total number of (x, field-direction, y) points — used for progress.
+        n_directions = len([self.b, -self.b] * int(self.repeat_num))
+        total_points = len(self.x_values) * len(self.y_values) * n_directions
 
         # Start sweeping loop — outer loop over x positions
         for i in range(len(self.x_values)):
-            count_x += 1
             stage.move_x_to(self.x_values[i])
 
             for item in [self.b, -self.b] * int(self.repeat_num):
@@ -169,15 +171,11 @@ class XY_Sweep(Procedure):
                     balanced_diodes_data, intensity_diode_data = dac.read_data()
                     balanced_diodes_DC = np.mean(balanced_diodes_data)
 
-                    # Demodulate the signal if there is a modulation
-                    if self.demod != 'None':
-                        balanced_diodes_1f = dac.demodulation(balanced_diodes_data, dac.reference_signal_1f,
-                                                              offset=balanced_diodes_DC, bandwith=self.lockin_bw, order=3.)
-                        balanced_diodes_2f = dac.demodulation(balanced_diodes_data, dac.reference_signal_2f,
-                                                              offset=balanced_diodes_DC, bandwith=self.lockin_bw, order=3.)
-                    else:
-                        balanced_diodes_1f = {"X": 0, "Y": 0, "R": 0, "theta": 0}
-                        balanced_diodes_2f = {"X": 0, "Y": 0, "R": 0, "theta": 0}
+                    # The 1f MOKE signal columns are read directly from the
+                    # lock-in amplifier (meas.x1/y1/mag1/theta1) below.  The
+                    # software demodulation that used to run here was computed but
+                    # never used (its result was discarded), so it has been
+                    # removed to avoid the dead per-point filtfilt cost.
 
                     data = {
                         'Iteration':            i,
@@ -201,10 +199,10 @@ class XY_Sweep(Procedure):
 
                     log.debug("Produced numbers: %s" % data)
                     self.emit('results', data)
-                    prog = (count_x * len([self.b] * int(self.repeat_num) + [-self.b] * int(self.repeat_num))
-                            * len(self.y_values) + count_b * len(self.y_values) + y)
-                    self.emit('progress', 100 * prog / len(self.x_values) / len(self.y_values) /
-                              len([self.b] * int(self.repeat_num) + [-self.b] * int(self.repeat_num)))
+                    # count_b already advances once per (x, field-direction), so
+                    # it encodes the x progression — no separate x term needed.
+                    prog = count_b * len(self.y_values) + y
+                    self.emit('progress', 100 * prog / total_points)
                     if self.should_stop():
                         break
                 if self.should_stop():

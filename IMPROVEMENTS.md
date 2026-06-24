@@ -11,6 +11,13 @@ lost.
 - **Explicit lock-in reference mode.** X/Y/XY sweeps select dual-harmonic mode
   in `startup()` before reading `x1/y1/mag1/theta1`, so a run no longer depends
   on whatever mode the instrument was last left in.
+- **De-duplicated the X/Y/XY sweep procedures.** The shared logic (hardware
+  setup, per-point measurement, the sweep loop and teardown) now lives once in
+  `src/procedures/position_sweep.py::PositionSweep`. Each procedure is reduced to
+  its parameters/metadata plus a small `_configure_scan()` that builds an ordered
+  list of `(x, y, field, iteration)` points; the base walks it. Visit order and
+  saved columns are unchanged (locked by `test_sweep_visit_order_preserved`).
+  This removes the copy-paste drift that let the XY-only progress bug exist.
 
 ## Deferred — hardware-dependent
 - **Continuous field ramp + streaming acquisition.**
@@ -43,9 +50,6 @@ lost.
   slow measurements rather than always on.
 - **Per-point error handling.** Record `NaN` and continue on a transient
   instrument read error instead of aborting the whole sweep.
-- **De-duplicate X/Y/XY procedures.** They are ~90% identical; a shared base (or
-  one parametrized sweep) would remove a class of copy-paste bugs (the XY
-  progress bug came from exactly this divergence).
 - **Faster lock-in readout.** Reading `x1,y1,mag1,theta1` is four VISA queries
   per point; the 7270 can return several values per command, or its internal
   curve buffer can be armed once and dumped at the end of a sweep.

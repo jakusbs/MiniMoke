@@ -272,8 +272,9 @@ def test_b_sweep_fast_mode_field_not_divided_by_n():
 
 def test_xy_sweep_progress_monotonic_and_bounded():
     """XY progress must rise monotonically and never exceed 100 %."""
+    import src.procedures.position_sweep as ps
     import src.procedures.xy_sweep_proc as xyp
-    _patch_proc_module(xyp)
+    _patch_proc_module(ps)              # shared sweep logic lives in position_sweep
 
     p = xyp.XY_Sweep()
     p.set_sample_name("t")
@@ -457,8 +458,9 @@ def test_x_sweep_shutdown_skips_moveback_on_abort():
     """shutdown() must skip the long move-back to start when aborted, but still
     do it on a normal finish.  The non-abortable move-back is the main reason an
     abort could appear to hang the whole app."""
+    import src.procedures.position_sweep as ps
     import src.procedures.x_sweep_proc as xsp
-    fakes = _patch_proc_module(xsp)
+    fakes = _patch_proc_module(ps)     # startup/execute/shutdown live in position_sweep
 
     moves = []
     fakes["stage"].move_x_to = lambda v: moves.append(("x", v))
@@ -467,6 +469,7 @@ def test_x_sweep_shutdown_skips_moveback_on_abort():
     p = xsp.X_Sweep()
     p.set_sample_name("t")
     p.x_min, p.x_max, p.y = -0.02, 0.02, 0.0
+    p._home = (p.x_min, p.y)                 # normally set by startup()
 
     p.should_stop = lambda: True            # aborted -> no move-back
     p.shutdown()
@@ -487,8 +490,9 @@ def test_single_lockin_instance():
 def test_x_sweep_sets_lockin_reference_mode_in_startup():
     """X/Y/XY read first-harmonic outputs, so startup must select dual-harmonic
     reference mode (1); otherwise those reads return '' and raise mid-sweep."""
+    import src.procedures.position_sweep as ps
     import src.procedures.x_sweep_proc as xsp
-    fakes = _patch_proc_module(xsp)
+    fakes = _patch_proc_module(ps)     # startup/execute/shutdown live in position_sweep
 
     calls = []
     fakes["dsp"].set_reference_mode = lambda mode=0: calls.append(mode)
@@ -501,6 +505,57 @@ def test_x_sweep_sets_lockin_reference_mode_in_startup():
     p.startup()
 
     assert 1 in calls, f"dual-harmonic reference mode not set in startup: {calls}"
+
+
+def test_sweep_visit_order_preserved():
+    """The PositionSweep refactor must reproduce each procedure's exact visit
+    order: field->position for X, and x->field->y for the XY grid."""
+    import src.procedures.position_sweep as ps
+    import src.procedures.x_sweep_proc as xsp
+    import src.procedures.xy_sweep_proc as xyp
+
+    def capture(p):
+        fakes = _patch_proc_module(ps)
+        state = {"x": 0.0, "y": 0.0}
+        fakes["stage"].move_x_to = lambda v: state.__setitem__("x", float(v))
+        fakes["stage"].move_y_to = lambda v: state.__setitem__("y", float(v))
+        fakes["stage"].get_x_pos = lambda: state["x"]
+        fakes["stage"].get_y_pos = lambda: state["y"]
+        visits = []
+
+        def emit(topic, rec=None, **k):
+            if topic == "results":
+                visits.append((round(rec["X Position (m)"] * 1000, 6),
+                               round(rec["Y Position (m)"] * 1000, 6),
+                               round(rec["Magnetic Field (A)"], 6)))
+        p.emit = emit
+        p.should_stop = lambda: False
+        p.startup()
+        p.execute()
+        return visits
+
+    px = xsp.X_Sweep()
+    px.set_sample_name("t")
+    px.x_min, px.x_max, px.x_step = 0.0, 0.01, 0.01    # x = [0, 0.01]
+    px.y, px.b, px.repeat_num = 0.0, 0.1, 1
+    px.demod, px.acq_time = "None", 0.001
+    assert capture(px) == [
+        (0.0, 0.0,  0.1), (0.01, 0.0,  0.1),           # field +0.1, x inner
+        (0.0, 0.0, -0.1), (0.01, 0.0, -0.1),           # field -0.1, x inner
+    ]
+
+    pxy = xyp.XY_Sweep()
+    pxy.set_sample_name("t")
+    pxy.x_min, pxy.x_max, pxy.x_step = 0.0, 0.01, 0.01  # x = [0, 0.01]
+    pxy.y_min, pxy.y_max, pxy.y_step = 0.0, 0.01, 0.01  # y = [0, 0.01]
+    pxy.b, pxy.repeat_num = 0.1, 1
+    pxy.demod, pxy.acq_time = "None", 0.001
+    assert capture(pxy) == [
+        (0.0,  0.0,  0.1), (0.0,  0.01,  0.1),          # x=0, +0.1, y inner
+        (0.0,  0.0, -0.1), (0.0,  0.01, -0.1),          # x=0, -0.1, y inner
+        (0.01, 0.0,  0.1), (0.01, 0.01,  0.1),          # x=0.01, +0.1, y inner
+        (0.01, 0.0, -0.1), (0.01, 0.01, -0.1),          # x=0.01, -0.1, y inner
+    ]
 
 
 # ---------------------------------------------------------------------------

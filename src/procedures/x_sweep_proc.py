@@ -1,23 +1,23 @@
 """
-Description: 
-    Define the full experiment procedure for a sweep along the X axis.
-    This file defines the necessary parameters, which are automatically used by
-    the UI thanks to pymeasure.
-    Then, it proceed to the main loop and perform the DC and AC measurements of the voltage
-    and save many other values. It also modulates the magnetic field at a given frequency.
-    All the results are saved in the DATA_COLUMNS object and plotted live in the main UI.
+Description:
+    Experiment procedure for a sweep along the X axis.
+
+    Only the X-specific bits live here (the parameters, the metadata and the
+    scan definition).  All the shared acquisition logic — hardware setup, the
+    per-point measurement, the sweep loop and teardown — lives in
+    ``PositionSweep`` (see position_sweep.py), which this class extends.
 """
 
 import time
 import numpy as np
 
-from pymeasure.experiment import Procedure, FloatParameter, Metadata, ListParameter
+from pymeasure.experiment import FloatParameter, Metadata, ListParameter
 
-from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import proc_config, dac_config
-from src.classes import meas, dsp
+from .position_sweep import PositionSweep
 
-class X_Sweep(Procedure):
+
+class X_Sweep(PositionSweep):
     """
     Procedure for a sweep along the X axis
     """
@@ -67,149 +67,16 @@ class X_Sweep(Procedure):
                                 units='V', default=section.get("cst_out", 0), minimum=0, maximum=2,
                                 group_by='demod', group_condition=lambda v: v == 'None' or 'AC_Output1' in v)
 
-    # Define all the data columns which will be recorded in the procedure
-    DATA_COLUMNS = [
-        'Iteration',
-        'X Position (m)',
-        'Y Position (m)',
-        'Magnetic Field (A)',
-        'Magnetic Field (T)',
-        'Voltage X 1f (V)',
-        'Voltage Y 1f (V)',
-        'Voltage R 1f (V)',
-        'Voltage theta 1f (V)',
-        'Voltage DC (V)',
-        'Voltage DC STD (V)',
-        'Intensity (V)',
-        'Intensity STD (V)',
-    ]
-
-    def set_sample_name(self, sample_name):
-        self.sample_name = sample_name
-
-    def startup(self):
-        """
-        Define the tasks to do at the procedure's startup
-        """
-        dac.reserved        = True
-        hall_sensor.reserved = True
-        hall_sensor.set_aquisition_time(self.acq_time)
-        proc_config.save_parameters_dict(self.name, self._parameters)
-
-        # Define the values of positions for the sweep
+    def _configure_scan(self):
+        # Sweep x at the fixed y; for each field direction, step through every x.
+        # Order: field outer, position inner.  Iteration = position index.
         self.x_values = np.linspace(self.x_min, self.x_max,
                                     int(np.abs(self.x_max - self.x_min) // self.x_step + 1),
                                     endpoint=True)
+        field_seq = [self.b, -self.b] * int(self.repeat_num)
+        self._scan_sequence = [(xv, self.y, item, i)
+                               for item in field_seq
+                               for i, xv in enumerate(self.x_values)]
 
-        # Set the values of the metadata
         self.exp_type_md = "Sweep along x"
-        self.sample_md   = self.sample_name
         self.nb_it_md    = len(self.x_values)
-
-        # If the first value of the magnetic field is not zero, set it up and wait 1s
-        if self.b != 0:
-            log.info(f"Setting up magnetic field to {self.b}A, wait 1s")
-            dac.set_outputs_and_reset([0., 0., self.b])
-            time.sleep(1)
-
-        # Go to the required position and wait for the motors to be stable
-        log.info(f"Move stage to ({self.x_min}mm, {self.y}mm)")
-        stage.move_x_to(self.x_min)
-        stage.move_y_to(self.y)
-        stage.wait_stable()
-
-        # Setup the acquisition in the DAC with our parameters
-        dac.setup_aquisition(modulation_channel=self.demod, frequency=self.freq,
-                             acquisition_time=self.acq_time, sampling_rate=self.rate,
-                             modulation_amp=self.mod_amp)
-        # This scan reads the lock-in's first-harmonic outputs
-        # (meas.x1/y1/mag1/theta1), which are only valid in dual-harmonic
-        # reference mode.  Set it explicitly so the run never depends on whatever
-        # mode the instrument was last left in (otherwise those reads return an
-        # empty string and raise mid-sweep).
-        dsp.set_reference_mode(1)
-        dsp.setup_lockin_condition(lockin_voltage=self.volt, lockin_sensitivity=self.sensi,
-                                   lockin_frequency=self.lockin_freq,
-                                   lockin_time_constant=self.time_const, lockin_phase=self.phase)
-        dac.coils_output = self.b
-        dac.dc_output    = [self.cst_out1, self.cst_out2]
-
-    def execute(self):
-        """
-        Define the core of the procedure
-        """
-        log.info("Aquisition...")
-        count = -1
-        for item in [self.b, -self.b] * int(self.repeat_num):
-            count += 1
-            dac.coils_output = item
-
-            # Start sweeping loop
-            for i in range(len(self.x_values)):
-
-                # We move the stage to the next position
-                stage.move_x_to(self.x_values[i])
-
-                # We first trigger the task which will take acquisition time to complete on the DAC
-                dac.start_tasks()
-                # In the meantime we read the magnetic field
-                B_measurement = hall_sensor.read_mT()
-                # Then we read the data on the DAC; read_data will wait for the task to be done
-                balanced_diodes_data, intensity_diode_data = dac.read_data()
-                balanced_diodes_DC = np.mean(balanced_diodes_data)
-
-                # The 1f MOKE signal columns are read directly from the lock-in
-                # amplifier (meas.x1/y1/mag1/theta1) below.  The software
-                # demodulation that used to run here was computed but never used
-                # (its result was discarded), so it has been removed to avoid the
-                # dead per-point filtfilt cost.
-
-                data = {
-                    'Iteration':            i,
-                    'X Position (m)':       stage.get_x_pos() / 1000.0,
-                    'Y Position (m)':       stage.get_y_pos() / 1000.0,
-                    'Magnetic Field (A)':   item,
-                    'Magnetic Field (T)':   B_measurement / 1000.0,
-                    'Voltage X 1f (V)':     meas.x1,
-                    'Voltage Y 1f (V)':     meas.y1,
-                    'Voltage R 1f (V)':     meas.mag1,
-                    'Voltage theta 1f (V)': meas.theta1,
-                    # 'Voltage R 2f (V)':   balanced_diodes_2f["R"],
-                    # 'Voltage X 2f (V)':   meas.x2,
-                    # 'Voltage Y 2f (V)':   meas.y2,
-                    # 'Voltage theta 2f (V)':balanced_diodes_2f["theta"],
-                    'Voltage DC (V)':       balanced_diodes_DC,
-                    'Voltage DC STD (V)':   np.std(balanced_diodes_data),
-                    'Intensity (V)':        np.mean(intensity_diode_data),
-                    'Intensity STD (V)':    np.std(intensity_diode_data),
-                }
-
-                log.debug("Produced numbers: %s" % data)
-                self.emit('results', data)
-                prog = count * len(self.x_values) + i
-                self.emit('progress', 100 * prog / len(self.x_values) /
-                          len([self.b] * int(self.repeat_num) + [-self.b] * int(self.repeat_num)))
-                if self.should_stop():
-                    break
-        meas.shutdown()  # Set the lockin output to zero
-
-    def shutdown(self):
-        """
-        Define the tasks to do at the procedure's end
-        """
-        log.info("Aquisition done, turning off the outputs")
-        try:
-            # On abort, stop where we are: the move back to the start is long and
-            # not abortable, and running it here is the main reason an abort can
-            # appear to hang the app (pymeasure only finishes the abort once
-            # shutdown() returns).  The field is still switched off below.
-            if not self.should_stop():
-                stage.move_x_to(self.x_min)
-                stage.move_y_to(self.y)
-            dac.set_outputs_and_reset([0., 0., 0.])
-            hall_sensor.set_aquisition_time(0.5)
-        finally:
-            # Always release the hardware so the live tab resumes, even if a
-            # teardown call above raised.
-            dac.reserved         = False
-            hall_sensor.reserved = False

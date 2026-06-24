@@ -300,6 +300,41 @@ def test_xy_sweep_progress_monotonic_and_bounded():
     assert progs == sorted(progs), "progress is not monotonically increasing"
 
 
+def test_motor_odometer_no_phantom_jumps():
+    """The motor-control odometer must step by exactly 1 um per 1 um move.
+
+    Reproduces the reported "jumps by ~10 um after a few 1 um clicks": the old
+    per-digit rounding showed 0.006 mm as 0.016 mm.  The reconstructed reading
+    must now equal the true value (to the um) and change by exactly 1 um.
+    """
+    from src.ui import longitudinal_motors_tab_ui as L
+    from src.ui import polar_motors_tab_ui as P
+
+    for mod in (L, P):
+        def shown_mm(value):
+            mag = sum(int(mod._extract_digit(value, step, dec)) * step
+                      for step, dec in zip(mod.STEPS, mod.STEP_DECIMALS))
+            return -mag if value < 0 else mag
+
+        prev = None
+        for i in range(0, 2001):                       # 0 .. 2.000 mm in 1 um steps
+            mm = i * 0.001
+            shown = shown_mm(mm)
+            assert abs(shown - mm) < 5e-4, (
+                f"{mod.__name__}: {mm*1000:.0f} um displayed as {shown*1000:.0f} um"
+            )
+            if prev is not None:
+                step_um = round((shown - prev) * 1000)
+                assert step_um == 1, (
+                    f"{mod.__name__}: display jumped {step_um} um at {mm*1000:.0f} um"
+                )
+            prev = shown
+
+        # A few negative values round-trip too.
+        for mm in (-0.001, -0.006, -1.234):
+            assert abs(shown_mm(mm) - mm) < 5e-4, f"{mod.__name__}: negative {mm} mis-displayed"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

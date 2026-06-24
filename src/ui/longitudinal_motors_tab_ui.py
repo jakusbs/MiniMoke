@@ -58,14 +58,20 @@ class _MoveWorker(QThread):
 # ---------------------------------------------------------------------------
 
 def _extract_digit(value: float, step: float, decimal_pos: int) -> str:
+    """Return the single odometer digit at *decimal_pos* of *value* (in mm).
+
+    All digits are derived from the value rounded ONCE to the finest displayed
+    place, then sliced with integer (floor) division.  Rounding each digit
+    independently (the previous behaviour) let a higher place round up while the
+    lower place failed to carry — e.g. 0.006 mm was shown as 0.016 mm — making
+    the readout appear to jump by ~10 um every few 1 um steps even though the
+    motor moved correctly.
+    """
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "?"
-    abs_val = abs(value)
-    if decimal_pos < 0:
-        digit = int(abs_val // int(step)) % 10
-    else:
-        digit = int(round(abs_val * (10 ** decimal_pos))) % 10
-    return str(digit)
+    finest = max(STEP_DECIMALS)                        # smallest place shown (3 -> 0.001 mm)
+    scaled = int(round(abs(value) * (10 ** finest)))   # integer count of finest units
+    return str((scaled // (10 ** (finest - decimal_pos))) % 10)
 
 
 # ---------------------------------------------------------------------------

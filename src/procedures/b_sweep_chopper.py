@@ -1,0 +1,499 @@
+import time
+import numpy as np
+
+from pymeasure.experiment import (
+    Procedure,
+    FloatParameter,
+    IntegerParameter,
+    Metadata,
+)
+
+from src.classes import active_stage as stage, dac, hall_sensor, log
+from src.classes import meas, dsp
+from src.classes import proc_config, dac_config
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+HALL_MIN_ACQ_S      = 0.002     # minimum hall-sensor acquisition time (2 ms)
+DAC_SAMPLING_RATE   = 50_000.0  # samples/s for DAC acquisition
+SETTLE_TC_MULTIPLES = 5         # number of time-constants to wait after field step
+                                 # for the lock-in output to settle (5τ → <1 % error)
+
+
+class B_Sweep_Lockin(Procedure):
+    """
+    Hysteresis-loop procedure (B-Sweep) using the external chopper + lock-in
+    amplifier.  Forwards and backward branches are accumulated separately;
+    averaged results are emitted once at the end.
+    """
+    name = "B-Sweep LockIn"
+
+    # ── Metadata ──────────────────────────────────────────────────────────────
+    exp_type_md  = Metadata("Experiment type")
+    sample_md    = Metadata("Sample name")
+    nb_it_md     = Metadata("Total number of field points per sweep")
+    nb_sweeps_md = Metadata("Number of sweeps averaged")
+    time_md      = Metadata(
+        "Beginning of experiment",
+        fget=lambda: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())),
+    )
+
+    section = proc_config.get_section(name)
+
+    # ── Field sweep parameters ────────────────────────────────────────────────
+    b_min      = FloatParameter(
+        "From B",    units="A",
+        default=section.get("b_min", -0.5),  minimum=-6, maximum=6,
+    )
+    b_max      = FloatParameter(
+        "To B",      units="A",
+        default=section.get("b_max",  0.5),  minimum=-6, maximum=6,
+    )
+    b_step     = FloatParameter(
+        "Step",      units="A",
+        default=section.get("b_step", 0.04), minimum=1e-8, maximum=12,
+    )
+    sweep_freq = FloatParameter(
+        "Max sweep frequency", units="Hz",
+        default=section.get("sweep_freq", 0.1), minimum=0.001, maximum=10,
+    )
+    num_sweeps = IntegerParameter(
+        "Number of sweeps to average",
+        default=section.get("num_sweeps", 5),   minimum=1, maximum=1000,
+    )
+
+    # ── Lock-in / chopper parameters ──────────────────────────────────────────
+    chopper_freq = FloatParameter(
+        "Chopper / Lock-in reference frequency", units="Hz",
+        default=section.get("chopper_freq", 1777), minimum=1, maximum=102000,
+    )
+    volt         = FloatParameter(
+        "Lock-in output voltage",  units="V",
+        default=section.get("volt", 0.0),            minimum=0,     maximum=5,
+    )
+    sensi        = FloatParameter(
+        "Lock-in sensitivity",     units="V",
+        default=section.get("sensi", 500e-6),        minimum=1e-9,  maximum=1,
+    )
+    time_const   = FloatParameter(
+        "Lock-in time constant",   units="s",
+        default=section.get("time_const", 0.1),      minimum=10e-6, maximum=100,
+    )
+    phase        = FloatParameter(
+        "Lock-in phase",           units="deg",
+        default=section.get("phase", 0),             minimum=-180,  maximum=180,
+    )
+    acq_time     = FloatParameter(
+        "DAC acquisition time",    units="s",
+        default=section.get("acq_time", 0.1),        minimum=1e-6,
+    )
+
+    # Position parameters (not shown in main input list but stored in data)
+    x = FloatParameter("Position x", units="mm", default=section.get("x", 0.0))
+    y = FloatParameter("Position y", units="mm", default=section.get("y", 0.0))
+
+    # ── Output columns ────────────────────────────────────────────────────────
+    DATA_COLUMNS = [
+        "Iteration",
+        "X Position (m)",
+        "Y Position (m)",
+        "Magnetic Field (A)",
+        "Magnetic Field (T)",
+        "Voltage X 1f (V)",
+        "Voltage Y 1f (V)",
+        "Voltage R 1f (V)",
+        "Voltage theta 1f (V)",
+        "Voltage DC (V)",           # live: DC mean from current sweep
+        "Voltage DC Average (V)",   # emitted once at end: averaged DC
+        "Voltage R Average (V)",    # emitted once at end: averaged lock-in R
+        "Intensity (V)",
+        "Intensity STD (V)",
+    ]
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def set_sample_name(self, sample_name: str):
+        self.sample_name = sample_name
+
+    # ── Startup ───────────────────────────────────────────────────────────────
+    def startup(self):
+        """Reserve hardware, configure lock-in, build field arrays, initialise accumulators."""
+        dac.reserved         = True
+        hall_sensor.reserved = True
+
+        proc_config.save_parameters_dict(self.name, self._parameters)
+
+        # ── Build field arrays ────────────────────────────────────────────────
+        n_pts       = int(np.abs(self.b_max - self.b_min) // self.b_step + 1)
+        self.b_forward  = np.linspace(self.b_min, self.b_max, n_pts, endpoint=True)
+        self.b_backward = np.flip(self.b_forward).copy()
+
+        n_fwd   = len(self.b_forward)
+        n_bwd   = len(self.b_backward) - 1   # exclude shared b_max endpoint
+        n_total = n_fwd + n_bwd
+
+        self._n_fwd   = n_fwd
+        self._n_bwd   = n_bwd
+        self._n_total = n_total
+
+        # ── Timing ───────────────────────────────────────────────────────────
+        # Minimum time per point imposed by lock-in settling + DAC acquisition.
+        # This is the hard floor: the lock-in output is meaningless before it.
+        settle_s          = SETTLE_TC_MULTIPLES * self.time_const
+        self._min_t_point = settle_s + self.acq_time
+
+        # Requested time per point from sweep_freq ceiling
+        T_point_requested = 1.0 / (self.sweep_freq * n_total)
+
+        if T_point_requested < self._min_t_point:
+            log.warning(
+                f"sweep_freq={self.sweep_freq} Hz gives T_point={T_point_requested*1e3:.1f} ms, "
+                f"which is shorter than the required lock-in settle+acq time "
+                f"({self._min_t_point*1e3:.1f} ms = {SETTLE_TC_MULTIPLES}×τ + acq). "
+                f"T_point extended to {self._min_t_point*1e3:.1f} ms automatically."
+            )
+            self._T_point = self._min_t_point
+        else:
+            self._T_point = T_point_requested
+
+        # Hall sensor mode
+        self._hall_live = self._T_point >= HALL_MIN_ACQ_S
+        hall_acq = min(self.acq_time, HALL_MIN_ACQ_S) if self._hall_live else HALL_MIN_ACQ_S
+        hall_sensor.set_aquisition_time(hall_acq)
+
+        log.info(
+            f"B-Sweep LockIn | Points: {n_total} ({n_fwd} fwd + {n_bwd} bwd) | "
+            f"T_point: {self._T_point*1e3:.1f} ms | "
+            f"Settle ({SETTLE_TC_MULTIPLES}×τ): {settle_s*1e3:.1f} ms | "
+            f"DAC acq: {self.acq_time*1e3:.1f} ms | "
+            f"Hall live: {self._hall_live}"
+        )
+
+        # ── Metadata ─────────────────────────────────────────────────────────
+        self.exp_type_md  = "Hysteresis loop — external chopper + lock-in"
+        self.sample_md    = self.sample_name
+        self.nb_it_md     = n_total
+        self.nb_sweeps_md = self.num_sweeps
+
+        # ── Configure lock-in amplifier ───────────────────────────────────────
+        # Put the instrument in single reference mode (REFMODE 0) first.
+        # This is required so that X./Y./MAG./PHA. commands are valid.
+        # In dual harmonic mode (REFMODE 1/2) those commands return empty strings,
+        # causing the ValueError seen in the traceback.
+        dsp.set_reference_mode(0)
+        log.info("Lock-in set to single reference mode (REFMODE 0).")
+
+        # The lock-in is set to the chopper frequency so it demodulates only the
+        # component synchronous with the chopped beam.  The oscillator output
+        # voltage is set to `volt` (typically 0 V when the chopper reference
+        # is a TTL input rather than the lock-in's own oscillator output).
+        dsp.setup_lockin_condition(
+            lockin_voltage       = self.volt,
+            lockin_sensitivity   = self.sensi,
+            lockin_frequency     = self.chopper_freq,
+            lockin_time_constant = self.time_const,
+            lockin_phase         = self.phase,
+        )
+        log.info(
+            f"Lock-in configured: f={self.chopper_freq} Hz, "
+            f"sensi={self.sensi*1e6:.1f} µV, τ={self.time_const*1e3:.1f} ms, "
+            f"phase={self.phase}°"
+        )
+
+        # ── Configure DAC (no modulation — field only) ────────────────────────
+        # The DAC output channels are used only for the coil current.
+        # No sinusoidal modulation is generated by the DAC because the chopper
+        # provides the optical modulation externally.
+        dac.setup_aquisition(
+            modulation_channel = "None",
+            frequency          = self.chopper_freq,  # kept for reference-signal arrays
+            acquisition_time   = self.acq_time,
+            sampling_rate      = DAC_SAMPLING_RATE,
+            modulation_amp     = 0.0,
+        )
+
+        # ── Stage and initial field ───────────────────────────────────────────
+        if self.b_min != 0:
+            log.info(f"Setting magnetic field to {self.b_min} A, waiting 1 s...")
+            dac.set_outputs_and_reset([0.0, 0.0, self.b_min])
+            time.sleep(1)
+
+        log.info(f"Moving stage to ({self.x} mm, {self.y} mm)")
+        stage.move_x_to(self.x)
+        stage.move_y_to(self.y)
+        stage.wait_stable()
+
+        dac.coils_output = self.b_min
+
+        # ── Auto-phase the lock-in ────────────────────────────────────────────
+        # Issue AQN (auto-quadrature null) so the instrument rotates its phase
+        # reference until the Y channel is zeroed.  We wait long enough for the
+        # lock-in output to settle after the command (5 × τ) before the sweep
+        # starts, so the first data point is not contaminated by the transient.
+        autophase_settle_s = SETTLE_TC_MULTIPLES * self.time_const
+        log.info(
+            f"Running lock-in auto-phase (AQN), "
+            f"then waiting {autophase_settle_s*1e3:.0f} ms for output to settle..."
+        )
+        dsp.ask("AQN")
+        time.sleep(autophase_settle_s)
+        log.info("Auto-phase complete.")
+
+        # ── Accumulators (forward / backward, separate) ───────────────────────
+        self._fwd_dc_sum = np.zeros(n_fwd)
+        self._fwd_r_sum  = np.zeros(n_fwd)
+        self._fwd_b_sum  = np.zeros(n_fwd)
+        self._bwd_dc_sum = np.zeros(n_bwd)
+        self._bwd_r_sum  = np.zeros(n_bwd)
+        self._bwd_b_sum  = np.zeros(n_bwd)
+        self._sweeps_completed = 0
+
+    # ── Inner measurement helper ───────────────────────────────────────────────
+
+    def _measure_point(self, b_set: float, deadline: float):
+        """
+        Set coil current to `b_set`, wait for lock-in to settle, read lock-in
+        X/Y/R/θ plus DAC DC/intensity channels.  Sleep until `deadline`.
+
+        The lock-in must settle for SETTLE_TC_MULTIPLES × time_const after the
+        field (and hence the MOKE signal) changes.  The DAC acquisition window
+        runs concurrently with this settle period to make the best use of time.
+
+        Returns
+        -------
+        lockin_x, lockin_y, lockin_r, lockin_theta : float
+            Lock-in quadrature components and polar form.
+        voltage_dc : float
+            DC mean of balanced-diode ADC channel.
+        intensity  : float
+            Mean of intensity-diode ADC channel.
+        intensity_std : float
+            Std  of intensity-diode ADC channel.
+        B_mT : float
+            Hall sensor reading in mT, or NaN in fast mode.
+        """
+        # Step the field
+        dac.coils_output = b_set
+
+        # Wait for the lock-in output to settle after the MOKE signal has changed.
+        # This is the dominant time per point at typical lock-in time constants.
+        settle_s = SETTLE_TC_MULTIPLES * self.time_const
+        time.sleep(settle_s)
+
+        # Start the DAC acquisition window and simultaneously read the lock-in.
+        # dac.start_tasks() is non-blocking until dac.read_data() is called,
+        # so the lock-in reads happen in parallel with the DAC sampling window.
+        dac.start_tasks()
+
+        # Read lock-in outputs (Ametek 7270 returns settled values at this point).
+        # In single reference mode (REFMODE 0) the correct commands are:
+        #   X. / Y. / MAG. / PHA.     <- single reference mode  (correct)
+        #   X1. / Y1. / MAG1. / PHA1. <- dual harmonic only     (returns empty -> ValueError)
+        # set_reference_mode(0) is called in startup() to guarantee this state.
+        lockin_x     = meas.x
+        lockin_y     = meas.y
+        lockin_r     = meas.mag       # MAG. -- single reference mode
+        lockin_theta = meas.theta     # PHA. -- single reference mode
+
+        # Wait for DAC acquisition to finish and collect ADC data
+        balanced_data, intensity_data = dac.read_data()
+        voltage_dc    = float(np.mean(balanced_data))
+        intensity     = float(np.mean(intensity_data))
+        intensity_std = float(np.std(intensity_data))
+
+        # Hall sensor read
+        if self._hall_live:
+            B_mT = hall_sensor.read_mT()
+        else:
+            B_mT = float("nan")
+
+        # Sleep any remaining budget so the sweep stays on schedule
+        remaining = deadline - time.perf_counter()
+        if remaining > 0:
+            time.sleep(remaining)
+
+        return lockin_x, lockin_y, lockin_r, lockin_theta, voltage_dc, intensity, intensity_std, B_mT
+
+    # ── Execute ───────────────────────────────────────────────────────────────
+
+    def execute(self):
+        """
+        Perform `num_sweeps` full hysteresis loops (forward + backward each time).
+
+        Each point reads the lock-in X/Y/R/θ as the primary MOKE signal.
+        Averaging is performed branch-by-branch (forward and backward separately)
+        so that field direction is never mixed in the average.
+        """
+        n_fwd   = self._n_fwd
+        n_bwd   = self._n_bwd
+        T_point = self._T_point
+
+        x_pos = stage.get_x_pos()
+        y_pos = stage.get_y_pos()
+
+        A_TO_MT_APPROX = 1000.0   # placeholder for fast-mode live display
+
+        for sweep_num in range(self.num_sweeps):
+            log.info(f"Sweep {sweep_num + 1}/{self.num_sweeps}")
+
+            sweep_fwd_dc = np.zeros(n_fwd)
+            sweep_fwd_r  = np.zeros(n_fwd)
+            sweep_fwd_b  = np.zeros(n_fwd)
+            sweep_bwd_dc = np.zeros(n_bwd)
+            sweep_bwd_r  = np.zeros(n_bwd)
+            sweep_bwd_b  = np.zeros(n_bwd)
+
+            sweep_start = time.perf_counter()
+
+            # ── Forward branch: b_min → b_max ─────────────────────────────────
+            for i, b_set in enumerate(self.b_forward):
+                deadline = sweep_start + (i * T_point)
+                (lx, ly, lr, lt,
+                 vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
+
+                sweep_fwd_dc[i] = vdc
+                sweep_fwd_r[i]  = lr
+                sweep_fwd_b[i]  = B_mT   # may be NaN in fast mode
+
+                live_T = (B_mT / 1000.0) if self._hall_live else b_set * A_TO_MT_APPROX / 1000.0
+
+                self.emit("results", {
+                    "Iteration":              i,
+                    "X Position (m)":         x_pos / 1000.0,
+                    "Y Position (m)":         y_pos / 1000.0,
+                    "Magnetic Field (A)":     b_set,
+                    "Magnetic Field (T)":     live_T,
+                    "Voltage X 1f (V)":       lx,
+                    "Voltage Y 1f (V)":       ly,
+                    "Voltage R 1f (V)":       lr,
+                    "Voltage theta 1f (V)":   lt,
+                    "Voltage DC (V)":         vdc,
+                    "Voltage DC Average (V)": float("nan"),
+                    "Voltage R Average (V)":  float("nan"),
+                    "Intensity (V)":          inten,
+                    "Intensity STD (V)":      inten_std,
+                })
+
+                if self.should_stop():
+                    break
+
+            if self.should_stop():
+                break
+
+            # ── Backward branch: b_max → b_min (skip shared b_max point) ──────
+            for j, b_set in enumerate(self.b_backward[1:]):
+                deadline = sweep_start + ((n_fwd + j) * T_point)
+                (lx, ly, lr, lt,
+                 vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
+
+                sweep_bwd_dc[j] = vdc
+                sweep_bwd_r[j]  = lr
+                sweep_bwd_b[j]  = B_mT
+
+                live_T = (B_mT / 1000.0) if self._hall_live else b_set * A_TO_MT_APPROX / 1000.0
+
+                self.emit("results", {
+                    "Iteration":              n_fwd + j,
+                    "X Position (m)":         x_pos / 1000.0,
+                    "Y Position (m)":         y_pos / 1000.0,
+                    "Magnetic Field (A)":     b_set,
+                    "Magnetic Field (T)":     live_T,
+                    "Voltage X 1f (V)":       lx,
+                    "Voltage Y 1f (V)":       ly,
+                    "Voltage R 1f (V)":       lr,
+                    "Voltage theta 1f (V)":   lt,
+                    "Voltage DC (V)":         vdc,
+                    "Voltage DC Average (V)": float("nan"),
+                    "Voltage R Average (V)":  float("nan"),
+                    "Intensity (V)":          inten,
+                    "Intensity STD (V)":      inten_std,
+                })
+
+                if self.should_stop():
+                    break
+
+            # Accumulate branch sums
+            self._fwd_dc_sum += sweep_fwd_dc
+            self._fwd_r_sum  += sweep_fwd_r
+            self._bwd_dc_sum += sweep_bwd_dc
+            self._bwd_r_sum  += sweep_bwd_r
+            if self._hall_live:
+                self._fwd_b_sum += sweep_fwd_b
+                self._bwd_b_sum += sweep_bwd_b
+            self._sweeps_completed += 1
+
+            self.emit("progress", 100 * self._sweeps_completed / self.num_sweeps)
+
+            if self.should_stop():
+                break
+
+        # ── Final emit: averaged hysteresis loop ──────────────────────────────
+        n = self._sweeps_completed
+        log.info(f"Emitting final averaged hysteresis loop ({n} sweeps)...")
+
+        if not self._hall_live:
+            # Fast mode: collect one slow hall read per set-point now that we're
+            # off the sweep clock.
+            log.info("Fast mode: performing slow hall reads for averaged result...")
+            hall_sensor.set_aquisition_time(HALL_MIN_ACQ_S)
+
+            for i, b_set in enumerate(self.b_forward):
+                dac.coils_output = b_set
+                time.sleep(HALL_MIN_ACQ_S * 2)
+                self._fwd_b_sum[i] = hall_sensor.read_mT()
+
+            for j, b_set in enumerate(self.b_backward[1:]):
+                dac.coils_output = b_set
+                time.sleep(HALL_MIN_ACQ_S * 2)
+                self._bwd_b_sum[j] = hall_sensor.read_mT()
+
+        # Emit forward branch
+        for i, b_set in enumerate(self.b_forward):
+            self.emit("results", {
+                "Iteration":              i,
+                "X Position (m)":         x_pos / 1000.0,
+                "Y Position (m)":         y_pos / 1000.0,
+                "Magnetic Field (A)":     b_set,
+                "Magnetic Field (T)":     self._fwd_b_sum[i] / n / 1000.0,
+                "Voltage X 1f (V)":       float("nan"),
+                "Voltage Y 1f (V)":       float("nan"),
+                "Voltage R 1f (V)":       float("nan"),
+                "Voltage theta 1f (V)":   float("nan"),
+                "Voltage DC (V)":         float("nan"),
+                "Voltage DC Average (V)": self._fwd_dc_sum[i] / n,
+                "Voltage R Average (V)":  self._fwd_r_sum[i]  / n,
+                "Intensity (V)":          float("nan"),
+                "Intensity STD (V)":      float("nan"),
+            })
+
+        # Emit backward branch
+        for j, b_set in enumerate(self.b_backward[1:]):
+            self.emit("results", {
+                "Iteration":              n_fwd + j,
+                "X Position (m)":         x_pos / 1000.0,
+                "Y Position (m)":         y_pos / 1000.0,
+                "Magnetic Field (A)":     b_set,
+                "Magnetic Field (T)":     self._bwd_b_sum[j] / n / 1000.0,
+                "Voltage X 1f (V)":       float("nan"),
+                "Voltage Y 1f (V)":       float("nan"),
+                "Voltage R 1f (V)":       float("nan"),
+                "Voltage theta 1f (V)":   float("nan"),
+                "Voltage DC (V)":         float("nan"),
+                "Voltage DC Average (V)": self._bwd_dc_sum[j] / n,
+                "Voltage R Average (V)":  self._bwd_r_sum[j]  / n,
+                "Intensity (V)":          float("nan"),
+                "Intensity STD (V)":      float("nan"),
+            })
+
+        meas.shutdown()
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+
+    def shutdown(self):
+        """Return hardware to a safe idle state."""
+        log.info("Acquisition done — turning off outputs.")
+        dac.set_outputs_and_reset([0.0, 0.0, 0.0])
+        hall_sensor.set_aquisition_time(0.5)
+        dac.reserved         = False
+        hall_sensor.reserved = False

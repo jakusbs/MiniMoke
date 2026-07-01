@@ -24,7 +24,7 @@ from pymeasure.display.Qt import QtWidgets
 from PyQt5.QtGui import QIcon, QFontDatabase
 
 from src.ui         import UIWindow, UserManualTab, LiveTab, LongitudinalMotorsTab, PolarMotorsTab
-from src.procedures import B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep
+from src.procedures import B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement
 
 # ── DLL path setup ────────────────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ class MainWindow(UIWindow):
 
     def __init__(self):
         super().__init__(
-            procedure_class=[B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep],
+            procedure_class=[B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement],
             inputs=[
                 ['b_min', 'b_max', 'b_step', 'sweep_freq', 'num_sweeps'],
                 ['b_min', 'b_max', 'b_step', 'sweep_freq', 'num_sweeps', 'chopper_freq', 'volt', 'sensi', 'time_const', 'phase', 'acq_time'],
@@ -89,6 +89,8 @@ class MainWindow(UIWindow):
                  'y_min', 'y_max', 'y_step', 'x', 'b', 'repeat_num'],
                 ['volt', 'sensi', 'lockin_freq', 'time_const', 'phase', 'acq_time',
                  'x_min', 'x_max', 'x_step', 'y_min', 'y_max', 'y_step', 'b', 'repeat_num'],
+                ['b', 'volt', 'sensi', 'lockin_freq', 'time_const', 'phase', 'acq_time',
+                 'x', 'y', 'duration', 'interval'],
             ],
             displays=['sweep_freq'],
             x_axis='Magnetic Field (T)',

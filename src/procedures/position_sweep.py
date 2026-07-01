@@ -30,6 +30,39 @@ from src.classes import proc_config
 from src.classes import live_readout
 
 
+def read_signals(field_A) -> dict:
+    """Acquire one point of the common MOKE signals and return them as a dict.
+
+    Triggers the DAC acquisition, reads the Hall field while it runs, then reads
+    the balanced/intensity diodes and the lock-in first-harmonic outputs.  Also
+    updates the Live tab snapshot.  Shared by the position sweeps and the
+    time-domain measurement so the acquisition lives in exactly one place.
+
+    ``field_A`` is the commanded coil current (recorded as the field set-point).
+    """
+    dac.start_tasks()
+    B_measurement = hall_sensor.read_mT()
+    balanced_diodes_data, intensity_diode_data = dac.read_data()
+    balanced_diodes_DC = np.mean(balanced_diodes_data)
+    intensity_DC       = np.mean(intensity_diode_data)
+
+    # Keep the Live tab cards updating from this running measurement.
+    live_readout.push(balanced_diodes_DC, intensity_DC, B_measurement)
+
+    return {
+        'Magnetic Field (A)':   field_A,
+        'Magnetic Field (T)':   B_measurement / 1000.0,
+        'Voltage X 1f (V)':     meas.x1,
+        'Voltage Y 1f (V)':     meas.y1,
+        'Voltage R 1f (V)':     meas.mag1,
+        'Voltage theta 1f (V)': meas.theta1,
+        'Voltage DC (V)':       balanced_diodes_DC,
+        'Voltage DC STD (V)':   np.std(balanced_diodes_data),
+        'Intensity (V)':        intensity_DC,
+        'Intensity STD (V)':    np.std(intensity_diode_data),
+    }
+
+
 class PositionSweep(Procedure):
     """Common engine for the X / Y / XY position sweeps."""
 
@@ -120,34 +153,11 @@ class PositionSweep(Procedure):
         ``item`` is the commanded coil current; ``iteration`` is the value stored
         in the ``Iteration`` column (defined by the subclass's scan sequence).
         """
-        # Trigger the DAC task (takes the acquisition time to complete) ...
-        dac.start_tasks()
-        # ... read the magnetic field while it runs ...
-        B_measurement = hall_sensor.read_mT()
-        # ... then read the DAC data (waits for the task to finish).
-        balanced_diodes_data, intensity_diode_data = dac.read_data()
-        balanced_diodes_DC = np.mean(balanced_diodes_data)
-        intensity_DC       = np.mean(intensity_diode_data)
-
-        # Keep the Live tab cards updating from this running scan.
-        live_readout.push(balanced_diodes_DC, intensity_DC, B_measurement)
-
-        # The 1f MOKE signal columns come directly from the lock-in amplifier.
-        return {
-            'Iteration':            iteration,
-            'X Position (m)':       stage.get_x_pos() / 1000.0,
-            'Y Position (m)':       stage.get_y_pos() / 1000.0,
-            'Magnetic Field (A)':   item,
-            'Magnetic Field (T)':   B_measurement / 1000.0,
-            'Voltage X 1f (V)':     meas.x1,
-            'Voltage Y 1f (V)':     meas.y1,
-            'Voltage R 1f (V)':     meas.mag1,
-            'Voltage theta 1f (V)': meas.theta1,
-            'Voltage DC (V)':       balanced_diodes_DC,
-            'Voltage DC STD (V)':   np.std(balanced_diodes_data),
-            'Intensity (V)':        intensity_DC,
-            'Intensity STD (V)':    np.std(intensity_diode_data),
-        }
+        data = read_signals(item)
+        data['Iteration']      = iteration
+        data['X Position (m)'] = stage.get_x_pos() / 1000.0
+        data['Y Position (m)'] = stage.get_y_pos() / 1000.0
+        return data
 
     def execute(self):
         """Walk the scan sequence, measuring one point at each step.

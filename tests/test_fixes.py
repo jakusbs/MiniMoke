@@ -591,6 +591,33 @@ def test_x_sweep_sets_lockin_reference_mode_in_startup():
     assert 1 in calls, f"dual-harmonic reference mode not set in startup: {calls}"
 
 
+def test_time_measurement_records_time_series():
+    """The time-domain procedure records a monotonic Time column at a fixed
+    field, reusing the shared read_signals acquisition."""
+    import src.procedures.position_sweep as ps   # read_signals lives here
+    import src.procedures.time_proc as tp
+    _patch_proc_module(ps)
+    _patch_proc_module(tp)
+
+    p = tp.TimeMeasurement()
+    p.set_sample_name("t")
+    p.b, p.acq_time = 0.0, 0.001
+    p.duration, p.interval = 0.005, 0.001         # ~5 points
+
+    records = []
+    p.emit = lambda topic, rec=None, **k: records.append(rec) if topic == "results" else None
+    p.should_stop = lambda: False
+
+    p.startup()
+    p.execute()
+    p.shutdown()
+
+    assert records, "no points recorded"
+    assert all("Time (s)" in r and "Voltage DC (V)" in r for r in records)
+    times = [r["Time (s)"] for r in records]
+    assert times == sorted(times), "time must be non-decreasing"
+
+
 def test_sweep_visit_order_preserved():
     """The PositionSweep refactor must reproduce each procedure's exact visit
     order: field->position for X, and x->field->y for the XY grid."""

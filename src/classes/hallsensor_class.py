@@ -13,21 +13,22 @@ DLL_working = False
 
 try:
     import clr
-    # Resolve the DLL relative to the repository's libs/ folder so it works
-    # regardless of the install path / Windows username (the previous hardcoded
-    # path did not even match the username used in scripts/debug.bat).  Fall
-    # back to the historical absolute path if the relative one is missing.
+    # Use the known-good install path on the measurement PC first (this is the
+    # copy that actually loads and connects), then fall back to a DLL shipped
+    # next to the repo's libs/ folder only if that absolute path is missing.
     _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    dll_path = os.path.join(_repo_root, "libs", "MagnetPhysik.Usb.dll")
-    if not os.path.exists(dll_path):
-        dll_path = r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll'
+    _dll_candidates = [
+        r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll',
+        os.path.join(_repo_root, "libs", "MagnetPhysik.Usb.dll"),
+    ]
+    dll_path = next((p for p in _dll_candidates if os.path.exists(p)), None)
 
-    if os.path.exists(dll_path):
+    if dll_path is not None:
         clr.AddReference(dll_path)
         import MagnetPhysik as MP
         DLL_working = True
     else:
-        print(f"DLL not found at: {dll_path}")
+        print(f"MagnetPhysik DLL not found. Tried: {_dll_candidates}")
 except Exception as e:
     print(f"DLL Load Error: {e}")
     print("Ensure you are using 64-bit Python.")

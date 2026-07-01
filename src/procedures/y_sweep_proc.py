@@ -77,9 +77,10 @@ class Y_Sweep(PositionSweep):
         self.y_values = np.linspace(self.y_min, self.y_max,
                                     int(np.abs(self.y_max - self.y_min) // self.y_step + 1),
                                     endpoint=True)
+        # Each field pass over all positions is one loop (own line in the plot).
         field_seq = [self.b, -self.b] * int(self.repeat_num)
-        self._scan_sequence = [(self.x, yv, item, i)
-                               for item in field_seq
+        self._scan_sequence = [(self.x, yv, item, i, loop)
+                               for loop, item in enumerate(field_seq)
                                for i, yv in enumerate(self.y_values)]
 
         self.exp_type_md = "Sweep along y"

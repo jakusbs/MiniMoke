@@ -48,6 +48,7 @@ class PositionSweep(Procedure):
         'Voltage DC STD (V)',
         'Intensity (V)',
         'Intensity STD (V)',
+        'Loop',                 # loop index — used by the plot to break the line
     ]
 
     def set_sample_name(self, sample_name):
@@ -162,7 +163,7 @@ class PositionSweep(Procedure):
         last_x, last_y = self._home    # already positioned there by startup()
         last_item = None
 
-        for done, (xt, yt, item, iteration) in enumerate(seq):
+        for done, (xt, yt, item, iteration, loop) in enumerate(seq):
             if item != last_item:
                 dac.coils_output = item
                 last_item = item
@@ -174,6 +175,7 @@ class PositionSweep(Procedure):
                 last_y = yt
 
             data = self._measure_point(item, iteration)
+            data['Loop'] = loop
             log.debug("Produced numbers: %s" % data)
             self.emit('results', data)
             self.emit('progress', 100 * (done + 1) / total)

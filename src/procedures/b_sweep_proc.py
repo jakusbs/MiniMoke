@@ -115,6 +115,7 @@ class B_Sweep(Procedure):
         "Voltage DC Average (V)",
         'Intensity (V)',
         'Intensity STD (V)',   # emitted once at end: clean averaged loop
+        'Loop',                # loop index — used by the plot to break the line
     ]
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -335,6 +336,7 @@ class B_Sweep(Procedure):
                     "Voltage DC Average (V)": float("nan"),
                     "Intensity (V)":          intensity,
                     "Intensity STD (V)":      float("nan"),
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -364,6 +366,7 @@ class B_Sweep(Procedure):
                     "Voltage DC Average (V)": float("nan"),
                     "Intensity (V)":          intensity,
                     "Intensity STD (V)":      float("nan"),
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -437,6 +440,7 @@ class B_Sweep(Procedure):
                 "Voltage DC Average (V)": self._fwd_dc_sum[i] / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      self._fwd_intens_sum[i] / n,
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         # Emit backward branch
@@ -451,6 +455,7 @@ class B_Sweep(Procedure):
                 "Voltage DC Average (V)": self._bwd_dc_sum[j] / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      self._bwd_intens_sum[j] / n,
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         meas.shutdown()

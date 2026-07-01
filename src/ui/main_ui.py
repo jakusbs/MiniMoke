@@ -30,6 +30,7 @@ from pymeasure.display.widgets import (
 from qtpy.QtWidgets import QLineEdit as DirectoryLineEdit
 from pymeasure.experiment import Results
 
+from .separated_plot import SeparatedPlotWidget
 from src.classes import log, StatusBarHandler, stage, dac, hall_sensor, set_active_stage
 
 
@@ -739,8 +740,9 @@ class UIWindow(UIWindowBase):
         self.x_axis = x_axis
         self.y_axis = y_axis
         self.log_widget = LogWidget("Experiment Log")
-        self.plot_widget = PlotWidget("Results Graph", procedure_class[0].DATA_COLUMNS, self.x_axis,
-                                      self.y_axis, linewidth=linewidth)
+        # SeparatedPlotWidget breaks the line between loops using the Loop column.
+        self.plot_widget = SeparatedPlotWidget("Results Graph", procedure_class[0].DATA_COLUMNS,
+                                               self.x_axis, self.y_axis, linewidth=linewidth)
         self.plot_widget.setMinimumSize(100, 200)
 
         if "widget_list" not in kwargs:

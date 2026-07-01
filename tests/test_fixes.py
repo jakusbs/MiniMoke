@@ -319,6 +319,41 @@ def test_live_readout_push_updates_and_keeps_last_good_field():
     assert (r.balanced_v, r.intensity_v, r.field_mT) == (5.0, 6.0, 10.0)
 
 
+def test_loop_connect_breaks_between_loops():
+    """The plot connect-array must join points within a loop and break between."""
+    from src.ui.separated_plot import loop_connect
+    assert list(loop_connect([0, 0, 0, 1, 1, 2])) == [1, 1, 0, 1, 0, 0]
+    assert list(loop_connect([])) == []
+    assert list(loop_connect([5])) == [0]
+
+
+def test_separated_curve_passes_connect_from_loop_column():
+    """SeparatedResultsCurve must feed pyqtgraph a connect array built from the
+    Loop column, and fall back to a plain line when there is no Loop column."""
+    import pandas as pd
+    import pyqtgraph as pg
+    from src.ui.separated_plot import SeparatedResultsCurve
+
+    class FakeResults:
+        def __init__(self, df):
+            self.data = df
+
+    def run(df):
+        curve = SeparatedResultsCurve(FakeResults(df), x="X", y="Y", pen=pg.mkPen("r"))
+        curve.force_reload = False
+        captured = {}
+        curve.setData = lambda *a, **k: captured.update(connect=k.get("connect", "MISSING"))
+        curve.update_data()
+        return captured.get("connect")
+
+    conn = run(pd.DataFrame({"X": [0, 1, 0, 1], "Y": [1, 2, 3, 4], "Loop": [0, 0, 1, 1]}))
+    assert conn is not None and not isinstance(conn, str), conn
+    assert list(conn) == [1, 0, 1, 0]
+
+    # No Loop column -> plain connected line (setData called without connect=).
+    assert run(pd.DataFrame({"X": [0, 1], "Y": [1, 2]})) == "MISSING"
+
+
 def test_xy_sweep_progress_monotonic_and_bounded():
     """XY progress must rise monotonically and never exceed 100 %."""
     import src.procedures.position_sweep as ps

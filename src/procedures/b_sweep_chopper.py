@@ -111,6 +111,7 @@ class B_Sweep_Lockin(Procedure):
         "Voltage R Average (V)",    # emitted once at end: averaged lock-in R
         "Intensity (V)",
         "Intensity STD (V)",
+        "Loop",                     # loop index — used by the plot to break the line
     ]
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -403,6 +404,7 @@ class B_Sweep_Lockin(Procedure):
                     "Voltage R Average (V)":  float("nan"),
                     "Intensity (V)":          inten,
                     "Intensity STD (V)":      inten_std,
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -438,6 +440,7 @@ class B_Sweep_Lockin(Procedure):
                     "Voltage R Average (V)":  float("nan"),
                     "Intensity (V)":          inten,
                     "Intensity STD (V)":      inten_std,
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -513,6 +516,7 @@ class B_Sweep_Lockin(Procedure):
                 "Voltage R Average (V)":  self._fwd_r_sum[i]  / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      float("nan"),
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         # Emit backward branch
@@ -532,6 +536,7 @@ class B_Sweep_Lockin(Procedure):
                 "Voltage R Average (V)":  self._bwd_r_sum[j]  / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      float("nan"),
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         meas.shutdown()

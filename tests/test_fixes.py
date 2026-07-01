@@ -116,6 +116,27 @@ def test_longitudinal_wait_stable_calls_wait_move():
     assert calls == {"x": 1, "y": 1, "z": 1}, f"wait_move not called for every axis: {calls}"
 
 
+def test_longitudinal_backlash_applied():
+    """Backlash compensation must be programmed on every axis at the configured
+    distance, in device steps (scale=False)."""
+    s = LongitudinalStage.__new__(LongitudinalStage)   # bypass hardware __init__
+    s.enabled = True
+    s.mm2steps = 1000.0
+    s.backlash_mm = 0.02
+    calls = {}
+
+    class FakeMotor:
+        def __init__(self, key): self.key = key
+        def setup_gen_move(self, backlash_distance=None, scale=True):
+            calls[self.key] = (backlash_distance, scale)
+
+    s.motor_x, s.motor_y, s.motor_z = FakeMotor("x"), FakeMotor("y"), FakeMotor("z")
+    s._apply_backlash()
+
+    expected = int(round(0.02 * 1000.0))   # 20 steps
+    assert calls == {"x": (expected, False), "y": (expected, False), "z": (expected, False)}, calls
+
+
 def test_active_stage_enabled_is_bool_and_tracks_switch():
     """active_stage.enabled must be a real bool (broken @property before)."""
     val = C.active_stage.enabled

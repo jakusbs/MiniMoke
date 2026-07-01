@@ -48,8 +48,8 @@ class TimeMeasurement(Procedure):
     acq_time    = FloatParameter('Aquisition time',      units='s',   default=section.get("acq_time", 0.5),    minimum=1e-6)
 
     # ── Position to sit at ───────────────────────────────────────────────────
-    x = FloatParameter('Position x', units='mm', default=section.get("x", 0))
-    y = FloatParameter('Position y', units='mm', default=section.get("y", 0))
+    x = FloatParameter('Position x', units='um', default=section.get("x", 0))
+    y = FloatParameter('Position y', units='um', default=section.get("y", 0))
 
     # ── Time base ────────────────────────────────────────────────────────────
     duration = FloatParameter('Duration',          units='s', default=section.get("duration", 60), minimum=1e-3)
@@ -88,9 +88,9 @@ class TimeMeasurement(Procedure):
             log.info(f"Setting field to {self.b} A, wait 1 s...")
             dac.set_outputs_and_reset([0., 0., self.b])
             time.sleep(1)
-        log.info(f"Move stage to ({self.x} mm, {self.y} mm)")
-        stage.move_x_to(self.x)
-        stage.move_y_to(self.y)
+        log.info(f"Move stage to ({self.x} um, {self.y} um)")
+        stage.move_x_to(self.x / 1000.0)   # µm (param) -> mm (stage)
+        stage.move_y_to(self.y / 1000.0)
         stage.wait_stable()
 
         dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,

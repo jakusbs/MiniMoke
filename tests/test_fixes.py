@@ -434,8 +434,8 @@ def test_default_x_axis_is_valid_and_time_selectable():
                 union.append(c)
 
     assert "Time (s)" in union, "Time column must be selectable on the plot x-axis"
-    assert X_Sweep.DEFAULT_X_AXIS == "X Position (m)"
-    assert Y_Sweep.DEFAULT_X_AXIS == "Y Position (m)"
+    assert X_Sweep.DEFAULT_X_AXIS == "X Position (um)"
+    assert Y_Sweep.DEFAULT_X_AXIS == "Y Position (um)"
     assert TimeMeasurement.DEFAULT_X_AXIS == "Time (s)"
 
 
@@ -482,8 +482,8 @@ def test_xy_sweep_progress_monotonic_and_bounded():
 
     p = xyp.XY_Sweep()
     p.set_sample_name("t")
-    p.x_min, p.x_max, p.x_step = 0.0, 0.02, 0.01     # 3 x points
-    p.y_min, p.y_max, p.y_step = 0.0, 0.02, 0.01     # 3 y points
+    p.x_min, p.x_max, p.x_step = 0.0, 20.0, 10.0     # 3 x points (µm)
+    p.y_min, p.y_max, p.y_step = 0.0, 20.0, 10.0     # 3 y points (µm)
     p.b = 0.1
     p.repeat_num = 2
     p.demod = "None"
@@ -672,7 +672,7 @@ def test_x_sweep_shutdown_skips_moveback_on_abort():
 
     p = xsp.X_Sweep()
     p.set_sample_name("t")
-    p.x_min, p.x_max, p.y = -0.02, 0.02, 0.0
+    p.x_min, p.x_max, p.y = -20.0, 20.0, 0.0   # µm
     p._home = (p.x_min, p.y)                 # normally set by startup()
 
     p.should_stop = lambda: True            # aborted -> no move-back
@@ -682,7 +682,8 @@ def test_x_sweep_shutdown_skips_moveback_on_abort():
     moves.clear()
     p.should_stop = lambda: False           # normal finish -> move back
     p.shutdown()
-    assert ("x", p.x_min) in moves and ("y", p.y) in moves, \
+    # Home is in µm; the stage is commanded in mm (µm / 1000).
+    assert ("x", p.x_min / 1000.0) in moves and ("y", p.y / 1000.0) in moves, \
         f"normal finish should move back to start: {moves}"
 
 
@@ -756,8 +757,8 @@ def test_sweep_visit_order_preserved():
 
         def emit(topic, rec=None, **k):
             if topic == "results":
-                visits.append((round(rec["X Position (m)"] * 1000, 6),
-                               round(rec["Y Position (m)"] * 1000, 6),
+                visits.append((round(rec["X Position (um)"], 6),   # positions are µm now
+                               round(rec["Y Position (um)"], 6),
                                round(rec["Magnetic Field (A)"], 6)))
         p.emit = emit
         p.should_stop = lambda: False
@@ -767,49 +768,49 @@ def test_sweep_visit_order_preserved():
 
     px = xsp.X_Sweep()
     px.set_sample_name("t")
-    px.x_min, px.x_max, px.x_step = 0.0, 0.01, 0.01    # x = [0, 0.01]
+    px.x_min, px.x_max, px.x_step = 0.0, 10.0, 10.0    # x = [0, 10] µm
     px.y, px.b, px.repeat_num = 0.0, 0.1, 1
     px.demod, px.acq_time = "None", 0.001
     assert capture(px) == [
-        (0.0, 0.0,  0.1), (0.01, 0.0,  0.1),           # field +0.1, x inner
-        (0.0, 0.0, -0.1), (0.01, 0.0, -0.1),           # field -0.1, x inner
+        (0.0, 0.0,  0.1), (10.0, 0.0,  0.1),           # field +0.1, x inner
+        (0.0, 0.0, -0.1), (10.0, 0.0, -0.1),           # field -0.1, x inner
     ]
 
     pxy = xyp.XY_Sweep()
     pxy.set_sample_name("t")
-    pxy.x_min, pxy.x_max, pxy.x_step = 0.0, 0.01, 0.01  # x = [0, 0.01]
-    pxy.y_min, pxy.y_max, pxy.y_step = 0.0, 0.01, 0.01  # y = [0, 0.01]
+    pxy.x_min, pxy.x_max, pxy.x_step = 0.0, 10.0, 10.0  # x = [0, 10] µm
+    pxy.y_min, pxy.y_max, pxy.y_step = 0.0, 10.0, 10.0  # y = [0, 10] µm
     pxy.b, pxy.repeat_num = 0.1, 1
     pxy.demod, pxy.acq_time = "None", 0.001
     assert capture(pxy) == [
-        (0.0,  0.0,  0.1), (0.0,  0.01,  0.1),          # x=0, +0.1, y inner
-        (0.0,  0.0, -0.1), (0.0,  0.01, -0.1),          # x=0, -0.1, y inner
-        (0.01, 0.0,  0.1), (0.01, 0.01,  0.1),          # x=0.01, +0.1, y inner
-        (0.01, 0.0, -0.1), (0.01, 0.01, -0.1),          # x=0.01, -0.1, y inner
+        (0.0,  0.0,  0.1), (0.0,  10.0,  0.1),          # x=0, +0.1, y inner
+        (0.0,  0.0, -0.1), (0.0,  10.0, -0.1),          # x=0, -0.1, y inner
+        (10.0, 0.0,  0.1), (10.0, 10.0,  0.1),          # x=10, +0.1, y inner
+        (10.0, 0.0, -0.1), (10.0, 10.0, -0.1),          # x=10, -0.1, y inner
     ]
 
 
 def test_xy_sweep_exposes_grid_bounds_for_2d_map():
     """XY-Sweep must expose the grid extent the 2D-map reads
-    ('<col>_start/_end/_step', in metres), stepped to match the scan; 1D and
+    ('<col>_start/_end/_step', in micrometres), stepped to match the scan; 1D and
     field sweeps must NOT look like a grid (so the map skips them)."""
     from src.procedures import XY_Sweep, X_Sweep, Y_Sweep, B_Sweep, TimeMeasurement
 
     p = XY_Sweep()
-    p.x_min, p.x_max, p.x_step = 0.0, 0.05, 0.02      # 3 points, spacing 0.025 mm
-    p.y_min, p.y_max, p.y_step = 0.2, 0.0, 0.01       # reversed range
+    p.x_min, p.x_max, p.x_step = 0.0, 50.0, 20.0      # 3 points, spacing 25 µm
+    p.y_min, p.y_max, p.y_step = 20.0, 0.0, 10.0      # reversed range
 
-    # Bounds are metres, normalised so start <= end regardless of scan direction.
-    assert getattr(p, "X Position (m)_start") == 0.0
-    assert abs(getattr(p, "X Position (m)_end") - 0.05 / 1000) < 1e-15
+    # Bounds are micrometres (same unit as the params), normalised start <= end.
+    assert getattr(p, "X Position (um)_start") == 0.0
+    assert getattr(p, "X Position (um)_end") == 50.0
     # Step is the ACTUAL linspace spacing (span/(N-1)), not the requested x_step,
     # so every image cell lines up with a scan point.
-    assert abs(getattr(p, "X Position (m)_step") - (0.05 / 2) / 1000) < 1e-15
-    assert getattr(p, "Y Position (m)_start") == 0.0                 # min(0.2, 0)
-    assert abs(getattr(p, "Y Position (m)_end") - 0.2 / 1000) < 1e-15
+    assert getattr(p, "X Position (um)_step") == 25.0
+    assert getattr(p, "Y Position (um)_start") == 0.0                # min(20, 0)
+    assert getattr(p, "Y Position (um)_end") == 20.0
 
     for cls in (X_Sweep, Y_Sweep, B_Sweep, TimeMeasurement):
-        assert not hasattr(cls(), "X Position (m)_start"), cls.__name__
+        assert not hasattr(cls(), "X Position (um)_start"), cls.__name__
 
 
 def test_2d_map_builds_image_sized_to_the_grid():
@@ -821,8 +822,8 @@ def test_2d_map_builds_image_sized_to_the_grid():
     from src.procedures import XY_Sweep
 
     p = XY_Sweep()
-    p.x_min, p.x_max, p.x_step = 0.0, 0.05, 0.02
-    p.y_min, p.y_max, p.y_step = 0.0, 0.04, 0.01
+    p.x_min, p.x_max, p.x_step = 0.0, 50.0, 20.0
+    p.y_min, p.y_max, p.y_step = 0.0, 40.0, 10.0
     p._configure_scan()
     nx, ny = len(p.x_values), len(p.y_values)
 
@@ -831,7 +832,7 @@ def test_2d_map_builds_image_sized_to_the_grid():
         data = pd.DataFrame(columns=XY_Sweep.DATA_COLUMNS)
 
     iw = ImageWidget("2D Map", XY_Sweep.DATA_COLUMNS,
-                     "X Position (m)", "Y Position (m)", z_axis="Voltage DC (V)")
+                     "X Position (um)", "Y Position (um)", z_axis="Voltage DC (V)")
     img = iw.new_curve(FakeResults())
     assert isinstance(img, ResultsImage)
     assert (img.xsize, img.ysize) == (nx, ny), (img.xsize, img.ysize, nx, ny)

@@ -6,12 +6,19 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Positions are in micrometres.** All X/Y position parameters (scan
+  start/stop/step and the fixed spot position), the recorded position columns
+  (`X/Y Position (um)`), and the plot/2D-map axes are now micrometres — the
+  natural unit for this setup's µm-scale moves. The stages are still commanded in
+  millimetres; conversion happens only at the hardware boundary (helpers in
+  `position_sweep.py`). Old data files (`… (mm)` / `… (m)` columns) are converted
+  on open, and the stored config values were migrated ×1000.
 - **2D colour map for the XY grid scan.** The results panel gained a "2D Map"
   tab (pymeasure `ImageWidget`) that renders the XY grid as a colour map instead
   of overlapping line traces. The `XY_Sweep` exposes the grid extent
-  (`X/Y Position (m)_start/_end/_step`, in metres) that `ResultsImage` reads;
-  the step is the *actual* linspace spacing (`span/(N-1)`), so every image cell
-  lines up with a scan point even when the requested step doesn't divide the
+  (`X/Y Position (um)_start/_end/_step`, in micrometres) that `ResultsImage`
+  reads; the step is the *actual* linspace spacing (`span/(N-1)`), so every image
+  cell lines up with a scan point even when the requested step doesn't divide the
   range evenly. The colour (z) axis is user-selectable (defaults to
   `Voltage DC (V)`). Line and map update live side by side; procedures that are
   not a grid (B/X/Y/Time) contribute no image curve and leave the map empty.

@@ -646,8 +646,12 @@ class UIWindowBase(QtWidgets.QMainWindow):
                 # Rename them in-place so the plot axes resolve correctly.
                 _COLUMN_ALIASES = {
                     "Magnetic Field (mT)": "Magnetic Field (T)",
-                    "X Position (mm)":     "X Position (m)",
-                    "Y Position (mm)":     "Y Position (m)",
+                    # Positions are now recorded in micrometres.  Older files used
+                    # millimetres, and files from the interim version used metres.
+                    "X Position (mm)":     "X Position (um)",
+                    "Y Position (mm)":     "Y Position (um)",
+                    "X Position (m)":      "X Position (um)",
+                    "Y Position (m)":      "Y Position (um)",
                 }
                 existing = set(results.data.columns)
                 rename_map = {
@@ -659,10 +663,15 @@ class UIWindowBase(QtWidgets.QMainWindow):
                     results.data.rename(columns=rename_map, inplace=True)
                     if "Magnetic Field (mT)" in rename_map:
                         results.data["Magnetic Field (T)"] /= 1000.0
+                    # Convert the renamed position values into micrometres.
                     if "X Position (mm)" in rename_map:
-                        results.data["X Position (m)"] /= 1000.0
+                        results.data["X Position (um)"] *= 1000.0
+                    elif "X Position (m)" in rename_map:
+                        results.data["X Position (um)"] *= 1e6
                     if "Y Position (mm)" in rename_map:
-                        results.data["Y Position (m)"] /= 1000.0
+                        results.data["Y Position (um)"] *= 1000.0
+                    elif "Y Position (m)" in rename_map:
+                        results.data["Y Position (um)"] *= 1e6
                     log.info(
                         f"Renamed legacy columns for '{os.path.basename(filename)}': "
                         + ", ".join(f"{o} -> {n}" for o, n in rename_map.items())
@@ -854,7 +863,7 @@ class UIWindow(UIWindowBase):
         # balance signal.  Only procedures that declare a grid contribute an image
         # curve (see new_curve); the others simply leave the map empty.
         self.image_widget = None
-        map_x, map_y, map_z = "X Position (m)", "Y Position (m)", "Voltage DC (V)"
+        map_x, map_y, map_z = "X Position (um)", "Y Position (um)", "Voltage DC (V)"
         if map_x in all_columns and map_y in all_columns:
             self.image_widget = ImageWidget(
                 "2D Map", all_columns, map_x, map_y,

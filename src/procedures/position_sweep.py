@@ -63,14 +63,41 @@ def read_signals(field_A) -> dict:
     }
 
 
+# The stages are commanded in millimetres, but every user-facing position
+# (parameters, data columns, plot/map axes) is in micrometres — easier to read
+# and type for the µm-scale moves this setup makes.  Convert only here, at the
+# hardware boundary, so mm never leaks into the user-facing layer.
+UM_PER_MM = 1000.0
+
+
+def move_x_um(x_um):
+    """Command the stage X axis to a target given in micrometres."""
+    stage.move_x_to(x_um / UM_PER_MM)
+
+
+def move_y_um(y_um):
+    """Command the stage Y axis to a target given in micrometres."""
+    stage.move_y_to(y_um / UM_PER_MM)
+
+
+def pos_x_um():
+    """Current stage X position in micrometres."""
+    return stage.get_x_pos() * UM_PER_MM
+
+
+def pos_y_um():
+    """Current stage Y position in micrometres."""
+    return stage.get_y_pos() * UM_PER_MM
+
+
 class PositionSweep(Procedure):
     """Common engine for the X / Y / XY position sweeps."""
 
     # Every position sweep records exactly these columns.
     DATA_COLUMNS = [
         'Iteration',
-        'X Position (m)',
-        'Y Position (m)',
+        'X Position (um)',
+        'Y Position (um)',
         'Magnetic Field (A)',
         'Magnetic Field (T)',
         'Voltage X 1f (V)',
@@ -125,9 +152,9 @@ class PositionSweep(Procedure):
 
         # Go to the start position and wait for the motors to be stable
         x0, y0 = self._home
-        log.info(f"Move stage to ({x0}mm, {y0}mm)")
-        stage.move_x_to(x0)
-        stage.move_y_to(y0)
+        log.info(f"Move stage to ({x0}um, {y0}um)")
+        move_x_um(x0)
+        move_y_um(y0)
         stage.wait_stable()
 
         # Setup the acquisition in the DAC with our parameters
@@ -154,9 +181,9 @@ class PositionSweep(Procedure):
         in the ``Iteration`` column (defined by the subclass's scan sequence).
         """
         data = read_signals(item)
-        data['Iteration']      = iteration
-        data['X Position (m)'] = stage.get_x_pos() / 1000.0
-        data['Y Position (m)'] = stage.get_y_pos() / 1000.0
+        data['Iteration']       = iteration
+        data['X Position (um)'] = pos_x_um()
+        data['Y Position (um)'] = pos_y_um()
         return data
 
     def execute(self):
@@ -178,10 +205,10 @@ class PositionSweep(Procedure):
                 dac.coils_output = item
                 last_item = item
             if xt != last_x:
-                stage.move_x_to(xt)
+                move_x_um(xt)
                 last_x = xt
             if yt != last_y:
-                stage.move_y_to(yt)
+                move_y_um(yt)
                 last_y = yt
 
             data = self._measure_point(item, iteration)
@@ -208,8 +235,8 @@ class PositionSweep(Procedure):
             # shutdown() returns).  The field is still switched off below.
             if home is not None and not self.should_stop():
                 x0, y0 = home
-                stage.move_x_to(x0)
-                stage.move_y_to(y0)
+                move_x_um(x0)
+                move_y_um(y0)
             dac.set_outputs_and_reset([0., 0., 0.])
             hall_sensor.set_aquisition_time(0.5)
         finally:

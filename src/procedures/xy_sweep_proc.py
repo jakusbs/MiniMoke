@@ -26,7 +26,7 @@ class XY_Sweep(PositionSweep):
     Procedure for a grid sweep along X and Y axes
     """
     name = "XY-Sweep"                                   # Define the name of the procedure
-    DEFAULT_X_AXIS = "X Position (m)"                    # plot x-axis when this tab is open
+    DEFAULT_X_AXIS = "X Position (um)"                   # plot x-axis when this tab is open
 
     # Create metadata objects, values will be stored during the startup
     exp_type_md = Metadata("Experiment type")
@@ -49,12 +49,12 @@ class XY_Sweep(PositionSweep):
     acq_time   = FloatParameter('Aquisition time',        units='s',   default=section.get("acq_time", 1),        minimum=1e-6)
     freq       = FloatParameter('Field modulation Freq',  units='Hz',  default=section.get("freq", 1777),         minimum=1,    maximum=1e5)
     demod      = ListParameter( 'Modulation channel',     AC_chan,     default=section.get("demod", AC_chan[0]))
-    x_min      = FloatParameter('From x',                 units='mm',  default=section.get("x_min", 0))
-    x_max      = FloatParameter('To x',                   units='mm',  default=section.get("x_max", 0.1))
-    x_step     = FloatParameter('Step x',                 units='mm',  default=section.get("x_step", 0.01))
-    y_min      = FloatParameter('From y',                 units='mm',  default=section.get("y_min", 0))
-    y_max      = FloatParameter('To y',                   units='mm',  default=section.get("y_max", 0.1))
-    y_step     = FloatParameter('Step y',                 units='mm',  default=section.get("y_step", 0.01))
+    x_min      = FloatParameter('From x',                 units='um',  default=section.get("x_min", 0))
+    x_max      = FloatParameter('To x',                   units='um',  default=section.get("x_max", 100))
+    x_step     = FloatParameter('Step x',                 units='um',  default=section.get("x_step", 10))
+    y_min      = FloatParameter('From y',                 units='um',  default=section.get("y_min", 0))
+    y_max      = FloatParameter('To y',                   units='um',  default=section.get("y_max", 100))
+    y_step     = FloatParameter('Step y',                 units='um',  default=section.get("y_step", 10))
     b          = FloatParameter('Field ',                 units='A',   default=section.get("b", 0.),              minimum=-6,   maximum=6)
     repeat_num = FloatParameter('Repeat number ',         units='',    default=section.get("repeat_num", 3),      minimum=1,    maximum=100)
 
@@ -104,22 +104,23 @@ class XY_Sweep(PositionSweep):
     # ── 2D-map grid bounds ────────────────────────────────────────────────────
     # The results "2D Map" tab uses pymeasure's ImageWidget / ResultsImage, which
     # reads the grid extent from attributes named "<column>_start/_end/_step" in
-    # that column's own units (positions are recorded in metres, so the mm
-    # parameters are converted).  The step is the *actual* linspace spacing
-    # (span / (N-1)), not the requested x_step, so every image cell lines up with
-    # a scan point even when the step does not divide the range evenly.
+    # that column's own units.  Positions are in micrometres here, same as the
+    # parameters, so no unit conversion is needed.  The step is the *actual*
+    # linspace spacing (span / (N-1)), not the requested x_step, so every image
+    # cell lines up with a scan point even when the step does not divide the
+    # range evenly.
     #
     # These are exposed lazily via __getattr__ so they are correct both for a
     # live queue (GUI values) and for a re-opened data file (values restored by
     # Results.load) — in neither case need startup() have run.  __getattr__ only
     # fires for names normal lookup misses, so it never shadows the parameters.
     _MAP_AXES = {
-        "X Position (m)": ("x_min", "x_max", "x_step"),
-        "Y Position (m)": ("y_min", "y_max", "y_step"),
+        "X Position (um)": ("x_min", "x_max", "x_step"),
+        "Y Position (um)": ("y_min", "y_max", "y_step"),
     }
 
     def _grid_bounds(self, lo, hi, step):
-        """(start, end, step) in the axis' mm units, sized to one cell per point."""
+        """(start, end, step) in micrometres, sized to one cell per scan point."""
         n = self._axis_points(lo, hi, step)
         start, end = min(lo, hi), max(lo, hi)
         span = end - start
@@ -133,5 +134,5 @@ class XY_Sweep(PositionSweep):
                     bounds = self._grid_bounds(getattr(self, lo),
                                                getattr(self, hi),
                                                getattr(self, st))
-                    return bounds[idx] / 1000.0
+                    return bounds[idx]
         raise AttributeError(name)

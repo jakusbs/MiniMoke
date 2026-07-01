@@ -93,14 +93,14 @@ class B_Sweep_Lockin(Procedure):
     )
 
     # Position parameters (not shown in main input list but stored in data)
-    x = FloatParameter("Position x", units="mm", default=section.get("x", 0.0))
-    y = FloatParameter("Position y", units="mm", default=section.get("y", 0.0))
+    x = FloatParameter("Position x", units="um", default=section.get("x", 0.0))
+    y = FloatParameter("Position y", units="um", default=section.get("y", 0.0))
 
     # ── Output columns ────────────────────────────────────────────────────────
     DATA_COLUMNS = [
         "Iteration",
-        "X Position (m)",
-        "Y Position (m)",
+        "X Position (um)",
+        "Y Position (um)",
         "Magnetic Field (A)",
         "Magnetic Field (T)",
         "Voltage X 1f (V)",
@@ -248,9 +248,9 @@ class B_Sweep_Lockin(Procedure):
             dac.set_outputs_and_reset([0.0, 0.0, self.b_min])
             time.sleep(1)
 
-        log.info(f"Moving stage to ({self.x} mm, {self.y} mm)")
-        stage.move_x_to(self.x)
-        stage.move_y_to(self.y)
+        log.info(f"Moving stage to ({self.x} um, {self.y} um)")
+        stage.move_x_to(self.x / 1000.0)   # µm (param) -> mm (stage)
+        stage.move_y_to(self.y / 1000.0)
         stage.wait_stable()
 
         dac.coils_output = self.b_min
@@ -361,8 +361,8 @@ class B_Sweep_Lockin(Procedure):
         n_bwd   = self._n_bwd
         T_point = self._T_point
 
-        x_pos = stage.get_x_pos()
-        y_pos = stage.get_y_pos()
+        x_pos = stage.get_x_pos() * 1000.0   # mm (stage) -> µm (data column)
+        y_pos = stage.get_y_pos() * 1000.0
 
         A_TO_MT_APPROX = 1000.0   # placeholder for fast-mode live display
 
@@ -392,8 +392,8 @@ class B_Sweep_Lockin(Procedure):
 
                 self.emit("results", {
                     "Iteration":              i,
-                    "X Position (m)":         x_pos / 1000.0,
-                    "Y Position (m)":         y_pos / 1000.0,
+                    "X Position (um)":        x_pos,
+                    "Y Position (um)":        y_pos,
                     "Magnetic Field (A)":     b_set,
                     "Magnetic Field (T)":     live_T,
                     "Voltage X 1f (V)":       lx,
@@ -428,8 +428,8 @@ class B_Sweep_Lockin(Procedure):
 
                 self.emit("results", {
                     "Iteration":              n_fwd + j,
-                    "X Position (m)":         x_pos / 1000.0,
-                    "Y Position (m)":         y_pos / 1000.0,
+                    "X Position (um)":        x_pos,
+                    "Y Position (um)":        y_pos,
                     "Magnetic Field (A)":     b_set,
                     "Magnetic Field (T)":     live_T,
                     "Voltage X 1f (V)":       lx,
@@ -504,8 +504,8 @@ class B_Sweep_Lockin(Procedure):
         for i, b_set in enumerate(self.b_forward):
             self.emit("results", {
                 "Iteration":              i,
-                "X Position (m)":         x_pos / 1000.0,
-                "Y Position (m)":         y_pos / 1000.0,
+                "X Position (um)":        x_pos,
+                "Y Position (um)":        y_pos,
                 "Magnetic Field (A)":     b_set,
                 "Magnetic Field (T)":     fwd_b_avg[i] / 1000.0,
                 "Voltage X 1f (V)":       float("nan"),
@@ -524,8 +524,8 @@ class B_Sweep_Lockin(Procedure):
         for j, b_set in enumerate(self.b_backward[1:]):
             self.emit("results", {
                 "Iteration":              n_fwd + j,
-                "X Position (m)":         x_pos / 1000.0,
-                "Y Position (m)":         y_pos / 1000.0,
+                "X Position (um)":        x_pos,
+                "Y Position (um)":        y_pos,
                 "Magnetic Field (A)":     b_set,
                 "Magnetic Field (T)":     bwd_b_avg[j] / 1000.0,
                 "Voltage X 1f (V)":       float("nan"),

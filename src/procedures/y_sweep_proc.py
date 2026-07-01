@@ -26,7 +26,7 @@ class Y_Sweep(PositionSweep):
     Procedure for a sweep along the Y axis
     """
     name = "Y-Sweep"                                    # Define the name of the procedure
-    DEFAULT_X_AXIS = "Y Position (m)"                    # plot x-axis when this tab is open
+    DEFAULT_X_AXIS = "Y Position (um)"                   # plot x-axis when this tab is open
 
     # Create metadata objects, values will be stored during the startup
     exp_type_md = Metadata("Experiment type")
@@ -49,10 +49,10 @@ class Y_Sweep(PositionSweep):
     acq_time   = FloatParameter('Aquisition time',        units='s',   default=section.get("acq_time", 1),        minimum=1e-6)
     freq       = FloatParameter('Field modulation Freq',  units='Hz',  default=section.get("freq", 1777),         minimum=1,    maximum=1e5)
     demod      = ListParameter( 'Modulation channel',     AC_chan,     default=section.get("demod", AC_chan[0]))
-    y_min      = FloatParameter('From y',                 units='mm',  default=section.get("y_min", 0))
-    y_max      = FloatParameter('To y',                   units='mm',  default=section.get("y_max", 0.1))
-    y_step     = FloatParameter('Step',                   units='mm',  default=section.get("y_step", 0.01))
-    x          = FloatParameter('Position x',             units='mm',  default=section.get("x", 0))
+    y_min      = FloatParameter('From y',                 units='um',  default=section.get("y_min", 0))
+    y_max      = FloatParameter('To y',                   units='um',  default=section.get("y_max", 100))
+    y_step     = FloatParameter('Step',                   units='um',  default=section.get("y_step", 10))
+    x          = FloatParameter('Position x',             units='um',  default=section.get("x", 0))
     b          = FloatParameter('Field ',                 units='A',   default=section.get("b", 0.),              minimum=-6,   maximum=6)
     repeat_num = FloatParameter('Repeat number ',         units='',    default=section.get("repeat_num", 5),      minimum=1,    maximum=1000)
 

@@ -11,6 +11,7 @@
 
 import os
 import sys
+import time
 
 try:
     import pythoncom
@@ -25,6 +26,8 @@ from PyQt5.QtGui import QIcon, QFontDatabase
 
 from src.ui         import UIWindow, UserManualTab, LiveTab, LongitudinalMotorsTab, PolarMotorsTab
 from src.procedures import B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement
+from src.classes    import log
+from src.classes.data_archive import append_lab_notebook, copy_file, LAB_NOTEBOOK_FILENAME
 
 # ── DLL path setup ────────────────────────────────────────────────────────────
 
@@ -108,6 +111,93 @@ class MainWindow(UIWindow):
         )
         self.setWindowTitle('MiniMOKE  · Magnetism and Interface Physics · ETHZ')
         self.setWindowIcon(QIcon('assets/ehv.ico'))
+
+        # Server base: data + lab notebook are copied under here after each run.
+        # General folder    -> <base>/Data/<date>/<mode>/
+        # Per-operator folder -> <base>/<operator>/Data/<date>/<mode>/
+        self.server_line.setText(r"Z:\projects\MOKE_mini")
+
+    # ── Post-measurement archiving ────────────────────────────────────────────
+
+    def running(self, experiment):
+        super().running(experiment)
+        self._run_start = time.time()
+
+    def finished(self, experiment):
+        super().finished(experiment)
+        self._archive_experiment(experiment)
+
+    def _archive_experiment(self, experiment):
+        """Copy the finished data file to the server and append a lab-notebook row.
+
+        Best-effort: if the server share is not mounted (e.g. no Z: drive) or a
+        write fails, it logs a warning and never interrupts the measurement flow.
+        """
+        from datetime import datetime
+
+        try:
+            src_file = experiment.data_filename
+        except Exception:
+            return
+        if not src_file or not os.path.exists(src_file):
+            return
+
+        procedure   = experiment.procedure
+        operator    = self.operator_line.text().strip() or "unknown"
+        now         = datetime.now()
+        date_folder = now.strftime("%Y-%m-%d")
+
+        try:
+            params = "; ".join(f"{k}={p.value}" for k, p in procedure.parameter_objects().items())
+        except Exception:
+            params = ""
+        try:
+            duration = round(time.time() - getattr(self, "_run_start", time.time()), 1)
+        except Exception:
+            duration = ""
+        total_points = getattr(procedure, "nb_it_md", "")
+        if not isinstance(total_points, (int, float)):
+            total_points = ""
+
+        row = {
+            "Date":         now.strftime("%Y-%m-%d"),
+            "Time":         now.strftime("%H:%M:%S"),
+            "Scan type":    getattr(procedure, "name", type(procedure).__name__),
+            "Sample ID":    self.sample_name_line.text(),
+            "Operator":     operator,
+            "Geometry":     "LMOKE" if self._setup_mode == "longitudinal" else "PMOKE",
+            "Stage type":   "Thorlabs" if self._setup_mode == "longitudinal" else "Trinamic",
+            "Total points": total_points,
+            "Duration (s)": duration,
+            "File path":    src_file,
+            "Parameters":   params,
+        }
+
+        # Local lab notebook: <Desktop>/lab notebook/lab_notebook_MINImoke.csv
+        try:
+            desktop  = os.path.dirname(self.directory) if self.directory_input else ""
+            local_nb = os.path.join(desktop, "lab notebook", LAB_NOTEBOOK_FILENAME)
+            append_lab_notebook(local_nb, row)
+        except Exception as exc:
+            log.warning(f"Could not update local lab notebook: {exc}")
+
+        # Server copies (general + per-operator) and the server lab notebook.
+        server_base = self.server_line.text().strip()
+        if not server_base:
+            return
+        for dest_dir in (
+            os.path.join(server_base, "Data", date_folder, self._setup_mode),
+            os.path.join(server_base, operator, "Data", date_folder, self._setup_mode),
+        ):
+            try:
+                copy_file(src_file, dest_dir)
+            except Exception as exc:
+                log.warning(f"Could not copy data to server '{dest_dir}': {exc}")
+        try:
+            append_lab_notebook(
+                os.path.join(server_base, "lab notebook", LAB_NOTEBOOK_FILENAME), row)
+        except Exception as exc:
+            log.warning(f"Could not update server lab notebook: {exc}")
 
     def queue(self, procedure=None):
         """Queue the next experiment and persist results to the data folder.

@@ -319,6 +319,91 @@ def test_live_readout_push_updates_and_keeps_last_good_field():
     assert (r.balanced_v, r.intensity_v, r.field_mT) == (5.0, 6.0, 10.0)
 
 
+def test_lab_notebook_append_and_server_copy():
+    """The lab notebook appends rows with a stable header (extra keys ignored,
+    missing ones blank), and copy_file creates the destination folder."""
+    import os
+    import csv
+    import tempfile
+    from src.classes.data_archive import append_lab_notebook, copy_file, LAB_NOTEBOOK_COLUMNS
+
+    d = tempfile.mkdtemp()
+    nb = os.path.join(d, "lab notebook", "lab_notebook_MINImoke.csv")
+    append_lab_notebook(nb, {"Date": "2026-07-01", "Scan type": "B-Sweep",
+                             "Operator": "jak", "Unknown": "ignored"})
+    append_lab_notebook(nb, {"Date": "2026-07-02", "Scan type": "Time", "Operator": "tobi"})
+
+    with open(nb, newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 2
+    assert rows[0]["Scan type"] == "B-Sweep" and rows[1]["Operator"] == "tobi"
+    assert set(rows[0].keys()) == set(LAB_NOTEBOOK_COLUMNS)   # header stable
+    assert rows[0]["Duration (s)"] == ""                      # missing -> blank
+
+    src = os.path.join(d, "data.csv")
+    with open(src, "w") as f:
+        f.write("a,b\n1,2\n")
+    dest = copy_file(src, os.path.join(d, "server", "Data", "2026-07-01", "longitudinal"))
+    assert os.path.exists(dest)
+    with open(dest) as f:
+        assert f.read() == "a,b\n1,2\n"
+
+
+def test_archive_experiment_writes_local_notebook_and_server_copies():
+    """MainWindow._archive_experiment must copy the data file to the general and
+    per-operator server folders and append the local + server lab notebooks."""
+    import os
+    import glob
+    import time
+    import types
+    import tempfile
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("moke_main", os.path.join(_REPO, "__main__.py"))
+    moke_main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(moke_main)      # defines MainWindow; does not launch the app
+
+    d = tempfile.mkdtemp()
+    local_data = os.path.join(d, "Desktop", "Data")
+    server     = os.path.join(d, "server")
+    os.makedirs(local_data, exist_ok=True)
+    src_csv = os.path.join(local_data, "sampleA_B-Sweep_x.csv")
+    with open(src_csv, "w") as f:
+        f.write("Iteration\n0\n")
+
+    class FakeLine:
+        def __init__(self, t): self._t = t
+        def text(self): return self._t
+
+    class FakeParam:
+        def __init__(self, v): self.value = v
+
+    class FakeProc:
+        name = "B-Sweep"
+        nb_it_md = 42
+        def parameter_objects(self): return {"b_min": FakeParam(-0.5), "b_max": FakeParam(0.5)}
+
+    class FakeExp:
+        data_filename = src_csv
+        procedure = FakeProc()
+
+    fake_self = types.SimpleNamespace(
+        operator_line=FakeLine("Jakub"),
+        server_line=FakeLine(server),
+        sample_name_line=FakeLine("sampleA"),
+        directory_input=True,
+        directory=local_data,
+        _setup_mode="longitudinal",
+        _run_start=time.time(),
+    )
+    moke_main.MainWindow._archive_experiment(fake_self, FakeExp())
+
+    assert os.path.exists(os.path.join(d, "Desktop", "lab notebook", "lab_notebook_MINImoke.csv"))
+    assert glob.glob(os.path.join(server, "Data", "*", "longitudinal", "*.csv")), "no general server copy"
+    assert glob.glob(os.path.join(server, "Jakub", "Data", "*", "longitudinal", "*.csv")), "no per-operator copy"
+    assert os.path.exists(os.path.join(server, "lab notebook", "lab_notebook_MINImoke.csv"))
+
+
 def test_loop_connect_breaks_between_loops():
     """The plot connect-array must join points within a loop and break between."""
     from src.ui.separated_plot import loop_connect

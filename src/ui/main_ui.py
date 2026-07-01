@@ -109,6 +109,18 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.sample_name_line = QLineEdit(self)
         self.sample_name_line.setText("MySample")
 
+        # Operator — recorded in the lab notebook and used for the per-user
+        # server folder (<server>/<operator>/Data/...).
+        self.operator_label = QtWidgets.QLabel(self)
+        self.operator_label.setText("Operator:")
+        self.operator_line = QLineEdit(self)
+
+        # Server directory — after each measurement the data file (and a lab
+        # notebook row) are copied here in addition to the local save.
+        self.server_label = QtWidgets.QLabel(self)
+        self.server_label.setText("Server directory:")
+        self.server_line = QLineEdit(self)
+
         # ── Setup toggle (Longitudinal / Polar) ───────────────────
         self._setup_mode = "longitudinal"   # internal state
 
@@ -309,6 +321,8 @@ class UIWindowBase(QtWidgets.QMainWindow):
 
         footer_vbox.addWidget(self.sample_name_label)
         footer_vbox.addWidget(self.sample_name_line)
+        footer_vbox.addWidget(self.operator_label)
+        footer_vbox.addWidget(self.operator_line)
         footer_vbox.addWidget(self.setup_toggle_widget)
         footer_vbox.addWidget(self.repetitions_label)
         footer_vbox.addWidget(self.repetitions_line)
@@ -316,6 +330,8 @@ class UIWindowBase(QtWidgets.QMainWindow):
         if self.directory_input:
             footer_vbox.addWidget(self.directory_label)
             footer_vbox.addWidget(self.directory_line)
+        footer_vbox.addWidget(self.server_label)
+        footer_vbox.addWidget(self.server_line)
 
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(self.queue_button)

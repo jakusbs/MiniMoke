@@ -28,7 +28,7 @@ from src.ui         import UIWindow, UserManualTab, LiveTab, LongitudinalMotorsT
 from src.procedures import B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement
 from src.classes    import log
 from src.classes.data_archive import (
-    append_lab_notebook, copy_file, LAB_NOTEBOOK_FILENAME, PARAM_TO_COLUMN,
+    append_lab_notebook, copy_file, safe_folder_name, LAB_NOTEBOOK_FILENAME, PARAM_TO_COLUMN,
 )
 
 # ── DLL path setup ────────────────────────────────────────────────────────────
@@ -157,17 +157,20 @@ class MainWindow(UIWindow):
         if not isinstance(total_points, (int, float)):
             total_points = ""
 
+        sample_name = self.sample_name_line.text()
         row = {
             "Date":                      now.strftime("%Y-%m-%d"),
             "Time":                      now.strftime("%H:%M:%S"),
             "Scan type":                 getattr(procedure, "name", type(procedure).__name__),
-            "Sample ID":                 self.sample_name_line.text(),
+            "Sample ID":                 sample_name,
             "Operator":                  operator,
-            "Geometry":                  "LMOKE" if self._setup_mode == "longitudinal" else "PMOKE",
+            "Setup":                     self._setup_mode,        # longitudinal / polar
+            "Geometry":                  ("PMOKE" if self._setup_mode == "polar"
+                                          else getattr(self, "_geometry", "")),  # PMOKE / LMOKE
             "Stage type":                "Thorlabs" if self._setup_mode == "longitudinal" else "Trinamic",
             "Total points":              total_points,
             "Measurement duration (s)":  duration,
-            "File path":                 src_file,
+            "File path":                 os.path.normpath(src_file),
         }
         # Fill the measurement settings into their named columns.
         try:
@@ -180,20 +183,23 @@ class MainWindow(UIWindow):
 
         # Local lab notebook: <Desktop>/lab notebook/lab_notebook_MINImoke.csv
         try:
-            desktop  = os.path.dirname(self.directory) if self.directory_input else ""
+            desktop  = os.path.dirname(os.path.normpath(self.directory)) if self.directory_input else ""
             local_nb = os.path.join(desktop, "lab notebook", LAB_NOTEBOOK_FILENAME)
             append_lab_notebook(local_nb, row)
         except Exception as exc:
             log.warning(f"Could not update local lab notebook: {exc}")
 
-        # Server copies (general + per-operator) and the server lab notebook.
+        # Server copies and the server lab notebook.
         server_base = self.server_line.text().strip()
         if not server_base:
             return
-        for dest_dir in (
-            os.path.join(server_base, "Data", date_folder, self._setup_mode),
-            os.path.join(server_base, operator, "Data", date_folder, self._setup_mode),
-        ):
+        server_base = os.path.normpath(server_base)   # clean, OS-native separators
+        #  general    -> <base>/Data/<date>/<setup>/
+        #  per-operator -> <base>/<operator>/<sample>/<setup>/<date>/
+        general_dir  = os.path.join(server_base, "Data", date_folder, self._setup_mode)
+        operator_dir = os.path.join(server_base, safe_folder_name(operator),
+                                    safe_folder_name(sample_name), self._setup_mode, date_folder)
+        for dest_dir in (general_dir, operator_dir):
             try:
                 copy_file(src_file, dest_dir)
             except Exception as exc:

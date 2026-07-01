@@ -25,6 +25,7 @@ from .position_sweep import read_signals
 class TimeMeasurement(Procedure):
     """Record the MOKE signals versus time at a fixed field and lock-in drive."""
     name = "Time"
+    DEFAULT_X_AXIS = "Time (s)"                          # plot x-axis when this tab is open
 
     # Metadata
     exp_type_md = Metadata("Experiment type")

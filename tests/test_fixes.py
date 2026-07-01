@@ -394,14 +394,16 @@ def test_archive_experiment_writes_local_notebook_and_server_copies():
         directory_input=True,
         directory=local_data,
         _setup_mode="longitudinal",
+        _geometry="LMOKE",
         _run_start=time.time(),
     )
     moke_main.MainWindow._archive_experiment(fake_self, FakeExp())
 
     local_nb = os.path.join(d, "Desktop", "lab notebook", "lab_notebook_MINImoke.csv")
     assert os.path.exists(local_nb)
+    # general -> <base>/Data/<date>/<setup>/ ; per-operator -> <base>/<op>/<sample>/<setup>/<date>/
     assert glob.glob(os.path.join(server, "Data", "*", "longitudinal", "*.csv")), "no general server copy"
-    assert glob.glob(os.path.join(server, "Jakub", "Data", "*", "longitudinal", "*.csv")), "no per-operator copy"
+    assert glob.glob(os.path.join(server, "Jakub", "sampleA", "longitudinal", "*", "*.csv")), "no per-operator copy"
     # Server lab notebook sits directly in the server base now.
     assert os.path.exists(os.path.join(server, "lab_notebook_MINImoke.csv"))
 
@@ -412,7 +414,29 @@ def test_archive_experiment_writes_local_notebook_and_server_copies():
     assert rec["Scan type"] == "B-Sweep"
     assert rec["Operator"] == "Jakub"
     assert rec["Field start (A)"] == "-0.5" and rec["Field stop (A)"] == "0.5"
-    assert rec["Geometry"] == "LMOKE"
+    assert rec["Setup"] == "longitudinal" and rec["Geometry"] == "LMOKE"
+
+
+def test_default_x_axis_is_valid_and_time_selectable():
+    """Every procedure's DEFAULT_X_AXIS must be one of its own columns, and the
+    union of all columns (offered by the plot) must include 'Time (s)'."""
+    from src.procedures import (B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep,
+                                XY_Sweep, TimeMeasurement)
+    procs = [B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement]
+
+    union = []
+    for cls in procs:
+        x = getattr(cls, "DEFAULT_X_AXIS", None)
+        assert x, f"{cls.name} has no DEFAULT_X_AXIS"
+        assert x in cls.DATA_COLUMNS, f"{cls.name}: {x!r} not in its DATA_COLUMNS"
+        for c in cls.DATA_COLUMNS:
+            if c not in union:
+                union.append(c)
+
+    assert "Time (s)" in union, "Time column must be selectable on the plot x-axis"
+    assert X_Sweep.DEFAULT_X_AXIS == "X Position (m)"
+    assert Y_Sweep.DEFAULT_X_AXIS == "Y Position (m)"
+    assert TimeMeasurement.DEFAULT_X_AXIS == "Time (s)"
 
 
 def test_loop_connect_breaks_between_loops():

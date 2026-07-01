@@ -121,8 +121,13 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.server_label.setText("Server directory:")
         self.server_line = QLineEdit(self)
 
-        # ── Setup toggle (Longitudinal / Polar) ───────────────────
+        # ── Setup toggle (Longitudinal / Polar) + Geometry (PMOKE / LMOKE) ──────
+        # "Setup" is the physical stage/setup; "Geometry" is the optical MOKE
+        # geometry (field vs magnetisation).  The longitudinal setup can do both
+        # PMOKE and LMOKE, so the geometry buttons only appear for it; the polar
+        # setup is always PMOKE.
         self._setup_mode = "longitudinal"   # internal state
+        self._geometry   = "LMOKE"          # PMOKE / LMOKE (longitudinal only)
 
         toggle_container = QtWidgets.QWidget(self)
         toggle_container.setObjectName("setupToggle")
@@ -142,6 +147,20 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self._btn_polar.clicked.connect(lambda: self._set_setup_mode("polar"))
         toggle_layout.addWidget(self._btn_longitudinal)
         toggle_layout.addWidget(self._btn_polar)
+
+        # Geometry sub-toggle (shown only for the longitudinal setup)
+        self._geometry_label = QtWidgets.QLabel("  Geometry:", toggle_container)
+        self._geometry_label.setObjectName("liveLabel")
+        toggle_layout.addWidget(self._geometry_label)
+        self._btn_pmoke = QtWidgets.QPushButton("PMOKE", toggle_container)
+        self._btn_lmoke = QtWidgets.QPushButton("LMOKE", toggle_container)
+        self._btn_pmoke.setObjectName("setupBtnInactive")
+        self._btn_lmoke.setObjectName("setupBtnActive")
+        self._btn_pmoke.clicked.connect(lambda: self._set_geometry("PMOKE"))
+        self._btn_lmoke.clicked.connect(lambda: self._set_geometry("LMOKE"))
+        toggle_layout.addWidget(self._btn_pmoke)
+        toggle_layout.addWidget(self._btn_lmoke)
+
         toggle_layout.addStretch()
         self.setup_toggle_widget = toggle_container
 
@@ -206,14 +225,40 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self._btn_polar.setObjectName(
             "setupBtnActive" if mode == "polar" else "setupBtnInactive")
         # Force QSS re-evaluation after objectName change
-        self._btn_longitudinal.style().unpolish(self._btn_longitudinal)
-        self._btn_longitudinal.style().polish(self._btn_longitudinal)
-        self._btn_polar.style().unpolish(self._btn_polar)
-        self._btn_polar.style().polish(self._btn_polar)
+        for btn in (self._btn_longitudinal, self._btn_polar):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+        # Geometry only applies to the longitudinal setup; the polar setup is
+        # always PMOKE.  Show/hide the geometry buttons, but keep the stored
+        # longitudinal geometry (self._geometry) across setup switches.
+        show_geometry = (mode != "polar")
+        for w in (self._geometry_label, self._btn_pmoke, self._btn_lmoke):
+            w.setVisible(show_geometry)
+        if show_geometry:
+            self._set_geometry(self._geometry)   # refresh button styling
+
+    def _set_geometry(self, geometry: str):
+        """Select the optical MOKE geometry (PMOKE / LMOKE) for the longitudinal
+        setup.  Recorded in the lab notebook."""
+        self._geometry = geometry
+        self._btn_pmoke.setObjectName(
+            "setupBtnActive" if geometry == "PMOKE" else "setupBtnInactive")
+        self._btn_lmoke.setObjectName(
+            "setupBtnActive" if geometry == "LMOKE" else "setupBtnInactive")
+        for btn in (self._btn_pmoke, self._btn_lmoke):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     @property
     def setup_mode(self) -> str:
         return self._setup_mode
+
+    @property
+    def geometry(self) -> str:
+        """Effective MOKE geometry recorded for a measurement: PMOKE for the
+        polar setup, otherwise the selected longitudinal geometry."""
+        return "PMOKE" if self._setup_mode == "polar" else self._geometry
 
     def showEvent(self, event):
         """Re-apply compact inputs layout after the window is first shown.
@@ -273,6 +318,9 @@ class UIWindowBase(QtWidgets.QMainWindow):
                 b.setObjectName("procTabBtnActive" if bid == btn_id else "procTabBtnInactive")
                 b.style().unpolish(b)
                 b.style().polish(b)
+            # Default the results plot's x-axis to the quantity this procedure
+            # sweeps (position for X/Y scans, time for the time trace, ...).
+            self._apply_default_x_axis(btn_id)
 
         self._proc_btn_group.idClicked.connect(_on_proc_selected)
 
@@ -416,6 +464,27 @@ class UIWindowBase(QtWidgets.QMainWindow):
     def get_selected_tab_index(self):
         idx = self._proc_btn_group.checkedId()
         return idx if idx >= 0 else 0
+
+    def _apply_default_x_axis(self, idx):
+        """Set the results plot's x-axis to the procedure's swept quantity.
+
+        Each procedure may declare ``DEFAULT_X_AXIS`` (a column name); if it does
+        and that column exists in the plot, the x-axis switches to it when the
+        procedure tab is selected.
+        """
+        if not hasattr(self, "plot_widget"):
+            return
+        try:
+            x_col = getattr(self.procedure_class[idx], "DEFAULT_X_AXIS", None)
+        except Exception:
+            x_col = None
+        if not x_col:
+            return
+        combo = self.plot_widget.columns_x
+        pos = combo.findText(x_col)
+        if pos >= 0:
+            combo.setCurrentIndex(pos)
+            self.plot_widget.plot_frame.change_x_axis(x_col)
 
     def quit(self, evt=None):
         if self.manager.is_running():
@@ -756,8 +825,16 @@ class UIWindow(UIWindowBase):
         self.x_axis = x_axis
         self.y_axis = y_axis
         self.log_widget = LogWidget("Experiment Log")
+        # Offer every procedure's columns in the plot's axis selectors (union,
+        # order-preserving) so e.g. 'Time (s)' from the time trace is selectable
+        # even though the plot is built from the first procedure.
+        all_columns = []
+        for cls in procedure_class:
+            for col in cls.DATA_COLUMNS:
+                if col not in all_columns:
+                    all_columns.append(col)
         # SeparatedPlotWidget breaks the line between loops using the Loop column.
-        self.plot_widget = SeparatedPlotWidget("Results Graph", procedure_class[0].DATA_COLUMNS,
+        self.plot_widget = SeparatedPlotWidget("Results Graph", all_columns,
                                                self.x_axis, self.y_axis, linewidth=linewidth)
         self.plot_widget.setMinimumSize(100, 200)
 
@@ -767,6 +844,9 @@ class UIWindow(UIWindowBase):
 
         super().__init__(procedure_class, **kwargs)
         self.directory = "C:/Users/intermag/Desktop/Data"
+
+        # Match the plot x-axis to the initially selected procedure.
+        self._apply_default_x_axis(self.get_selected_tab_index())
 
         # Setup measured_quantities once we know x_axis and y_axis
         self.browser_widget.browser.measured_quantities = [self.x_axis, self.y_axis]

@@ -61,6 +61,7 @@ class B_Sweep(Procedure):
     never mixes measurements taken in opposite field directions.
     """
     name = "B-Sweep"
+    DEFAULT_X_AXIS = "Magnetic Field (T)"   # plot x-axis when this tab is open
 
     # ── Metadata ──────────────────────────────────────────────────────────────
     exp_type_md   = Metadata("Experiment type")

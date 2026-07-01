@@ -30,6 +30,7 @@ class B_Sweep_Lockin(Procedure):
     averaged results are emitted once at the end.
     """
     name = "B-Sweep LockIn"
+    DEFAULT_X_AXIS = "Magnetic Field (T)"   # plot x-axis when this tab is open
 
     # ── Metadata ──────────────────────────────────────────────────────────────
     exp_type_md  = Metadata("Experiment type")

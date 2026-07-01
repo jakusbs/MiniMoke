@@ -26,6 +26,7 @@ class XY_Sweep(PositionSweep):
     Procedure for a grid sweep along X and Y axes
     """
     name = "XY-Sweep"                                   # Define the name of the procedure
+    DEFAULT_X_AXIS = "X Position (m)"                    # plot x-axis when this tab is open
 
     # Create metadata objects, values will be stored during the startup
     exp_type_md = Metadata("Experiment type")

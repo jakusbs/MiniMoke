@@ -57,7 +57,8 @@ PARAM_TO_COLUMN = {
 # Fixed, ordered lab-notebook header: identity/meta columns, then the parameter
 # columns (grouped: field / position / lock-in / modulation / time), then tail.
 LAB_NOTEBOOK_COLUMNS = [
-    "Date", "Time", "Scan type", "Sample ID", "Operator", "Geometry", "Stage type",
+    "Date", "Time", "Scan type", "Sample ID", "Operator",
+    "Setup", "Geometry", "Stage type",
     # field
     "Field (A)", "Field start (A)", "Field stop (A)", "Field step (A)",
     "Sweep frequency (Hz)", "Num sweeps",
@@ -101,3 +102,17 @@ def copy_file(src_file: str, dest_dir: str) -> str:
     dest = os.path.join(dest_dir, os.path.basename(src_file))
     shutil.copy2(src_file, dest)
     return dest
+
+
+def safe_folder_name(name: str) -> str:
+    """Make *name* safe to use as a single folder name.
+
+    Replaces characters that are invalid in Windows paths (\\ / : * ? " < > |)
+    and trims surrounding whitespace/dots, so a sample name can be used as a
+    folder without breaking the path.
+    """
+    name = (name or "").strip()
+    for bad in '\\/:*?"<>|':
+        name = name.replace(bad, "_")
+    name = name.strip(" .")
+    return name or "unnamed"

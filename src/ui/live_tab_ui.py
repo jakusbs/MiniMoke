@@ -8,6 +8,7 @@ from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from src.classes import dac
 from src.classes import log
 from src.classes import hall_sensor
+from src.classes import live_readout
 
 class HallSensorThread(QThread):
     sensor_data_signal = pyqtSignal(float)
@@ -22,7 +23,10 @@ class HallSensorThread(QThread):
                     sensor_data = hall_sensor.read_mT()
                     if sensor_data: self.sensor_data_signal.emit(sensor_data)
                 else:
-                    sleep(1)
+                    # A scan owns the sensor; show its latest field instead of
+                    # freezing the card.
+                    self.sensor_data_signal.emit(live_readout.field_mT)
+                    sleep(0.2)
             except Exception as e:
                 # A transient read error must never terminate the thread,
                 # otherwise the live readout stays frozen until an app restart.
@@ -56,7 +60,13 @@ class VoltageThread(QThread):
                     }
                     self.balanced_diodes_signal.emit(output)
                 else:
-                    sleep(1)
+                    # A scan owns the DAC; show its latest values instead of
+                    # freezing the cards.
+                    self.balanced_diodes_signal.emit({
+                        "bd": live_readout.balanced_v,
+                        "id": live_readout.intensity_v,
+                    })
+                    sleep(0.2)
             except Exception as e:
                 # A transient DAQ error (e.g. during the hand-off when a scan
                 # releases the DAC) must not terminate the thread; otherwise the

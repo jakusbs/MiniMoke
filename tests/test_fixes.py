@@ -291,6 +291,34 @@ def test_b_sweep_fast_mode_field_not_divided_by_n():
         )
 
 
+def test_b_sweep_rejects_too_fast_for_hall():
+    """A field sweep faster than the Hall probe can follow must be rejected
+    (with a message) before it is ever queued."""
+    import src.procedures.b_sweep_proc as bsp
+    p = bsp.B_Sweep()
+    p.b_min, p.b_max, p.b_step = -0.5, 0.5, 0.01     # hundreds of points/sweep
+
+    p.sweep_freq = 50.0
+    msg = p.queue_validation_error()
+    assert msg and "too high" in msg, "fast sweep should be rejected"
+
+    p.sweep_freq = 0.5
+    assert p.queue_validation_error() is None, "a slow enough sweep must pass"
+
+
+def test_live_readout_push_updates_and_keeps_last_good_field():
+    """The Live tab snapshot updates every point, but a NaN/None field (fast
+    field sweeps) must not blank the field card."""
+    from src.classes.live_readout import LiveReadout
+    r = LiveReadout()
+    r.push(1.5, 2.5, 10.0)
+    assert (r.balanced_v, r.intensity_v, r.field_mT) == (1.5, 2.5, 10.0)
+    r.push(3.0, 4.0, float("nan"))
+    assert (r.balanced_v, r.intensity_v, r.field_mT) == (3.0, 4.0, 10.0)
+    r.push(5.0, 6.0, None)
+    assert (r.balanced_v, r.intensity_v, r.field_mT) == (5.0, 6.0, 10.0)
+
+
 def test_xy_sweep_progress_monotonic_and_bounded():
     """XY progress must rise monotonically and never exceed 100 %."""
     import src.procedures.position_sweep as ps

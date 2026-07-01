@@ -27,6 +27,7 @@ from pymeasure.experiment import Procedure
 from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config
+from src.classes import live_readout
 
 
 class PositionSweep(Procedure):
@@ -125,6 +126,10 @@ class PositionSweep(Procedure):
         # ... then read the DAC data (waits for the task to finish).
         balanced_diodes_data, intensity_diode_data = dac.read_data()
         balanced_diodes_DC = np.mean(balanced_diodes_data)
+        intensity_DC       = np.mean(intensity_diode_data)
+
+        # Keep the Live tab cards updating from this running scan.
+        live_readout.push(balanced_diodes_DC, intensity_DC, B_measurement)
 
         # The 1f MOKE signal columns come directly from the lock-in amplifier.
         return {
@@ -139,7 +144,7 @@ class PositionSweep(Procedure):
             'Voltage theta 1f (V)': meas.theta1,
             'Voltage DC (V)':       balanced_diodes_DC,
             'Voltage DC STD (V)':   np.std(balanced_diodes_data),
-            'Intensity (V)':        np.mean(intensity_diode_data),
+            'Intensity (V)':        intensity_DC,
             'Intensity STD (V)':    np.std(intensity_diode_data),
         }
 

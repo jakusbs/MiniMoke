@@ -41,6 +41,7 @@ from pymeasure.experiment import (
 from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config, dac_config
+from src.classes import live_readout
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,33 @@ class B_Sweep(Procedure):
     # ── Helpers ───────────────────────────────────────────────────────────────
     def set_sample_name(self, sample_name: str):
         self.sample_name = sample_name
+
+    def queue_validation_error(self):
+        """Return a message if the requested sweep frequency is too high for the
+        Hall probe at this step size, else None.
+
+        Each field point needs at least HALL_MIN_ACQ_S for a valid Hall reading,
+        so with n_total points per sweep the fastest valid sweep is
+        ``f_max = 1 / (n_total * HALL_MIN_ACQ_S)``.  The UI calls this before
+        queueing and refuses to start a sweep that would outrun the probe.
+        """
+        try:
+            n_pts   = int(np.abs(self.b_max - self.b_min) // self.b_step + 1)
+            n_total = n_pts + max(n_pts - 1, 0)      # forward + backward branches
+            if n_total < 1:
+                return None
+            f_max = 1.0 / (n_total * HALL_MIN_ACQ_S)
+            if self.sweep_freq > f_max:
+                return (
+                    f"Sweep frequency {self.sweep_freq:g} Hz is too high for the Hall "
+                    f"probe: {n_total} points/sweep need ≥ {HALL_MIN_ACQ_S * 1e3:g} ms "
+                    f"each, so the maximum at this step size is {f_max:.3g} Hz.\n\n"
+                    f"Lower the sweep frequency to ≤ {f_max:.3g} Hz, or increase the "
+                    f"field step."
+                )
+        except Exception:
+            return None
+        return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     def startup(self):
@@ -235,6 +263,9 @@ class B_Sweep(Procedure):
             # Too fast for real hall reads — use the DAC set-point as a
             # proxy for the live plot.  Averaged result will use a real read.
             B_mT = float("nan")
+
+        # Keep the Live tab cards updating from this running scan.
+        live_readout.push(voltage_dc, intensity, B_mT)
 
         # Burn any remaining budget so the next point starts on time
         remaining = deadline - time.perf_counter()

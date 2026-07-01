@@ -116,6 +116,15 @@ class MainWindow(UIWindow):
         if procedure is None:
             procedure = self.make_procedure()
 
+        # Reject configurations the hardware cannot honour (e.g. a field sweep
+        # faster than the Hall probe can follow) before anything is queued.
+        validate = getattr(procedure, "queue_validation_error", None)
+        if callable(validate):
+            message = validate()
+            if message:
+                QtWidgets.QMessageBox.warning(self, "Cannot queue measurement", message)
+                return
+
         # Build <base>/<date>/<mode>/ and create it if needed
         from datetime import date
         date_folder = date.today().strftime("%Y-%m-%d")

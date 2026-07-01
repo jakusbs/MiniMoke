@@ -11,6 +11,7 @@ from pymeasure.experiment import (
 from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config, dac_config
+from src.classes import live_readout
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,32 @@ class B_Sweep_Lockin(Procedure):
     # ── Helpers ───────────────────────────────────────────────────────────────
     def set_sample_name(self, sample_name: str):
         self.sample_name = sample_name
+
+    def queue_validation_error(self):
+        """Return a message if, even after lock-in settling, each point would be
+        faster than the Hall probe can follow, else None.
+
+        This version already stretches the per-point time to fit the lock-in
+        settle (5τ + acquisition), so it only rejects genuinely impossible
+        combinations (very small τ / acquisition time at a high sweep frequency).
+        """
+        try:
+            n_pts   = int(np.abs(self.b_max - self.b_min) // self.b_step + 1)
+            n_total = n_pts + max(n_pts - 1, 0)
+            if n_total < 1:
+                return None
+            settle_s = SETTLE_TC_MULTIPLES * self.time_const
+            t_point  = max(settle_s + self.acq_time, 1.0 / (self.sweep_freq * n_total))
+            if t_point < HALL_MIN_ACQ_S:
+                return (
+                    f"Even after lock-in settling, each point would take "
+                    f"{t_point * 1e3:.2g} ms — below the {HALL_MIN_ACQ_S * 1e3:g} ms the "
+                    f"Hall probe needs.\n\nLower the sweep frequency, increase the field "
+                    f"step, or increase the acquisition time / time constant."
+                )
+        except Exception:
+            return None
+        return None
 
     # ── Startup ───────────────────────────────────────────────────────────────
     def startup(self):
@@ -307,6 +334,9 @@ class B_Sweep_Lockin(Procedure):
             B_mT = hall_sensor.read_mT()
         else:
             B_mT = float("nan")
+
+        # Keep the Live tab cards updating from this running scan.
+        live_readout.push(voltage_dc, intensity, B_mT)
 
         # Sleep any remaining budget so the sweep stays on schedule
         remaining = deadline - time.perf_counter()

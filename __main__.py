@@ -27,7 +27,9 @@ from PyQt5.QtGui import QIcon, QFontDatabase
 from src.ui         import UIWindow, UserManualTab, LiveTab, LongitudinalMotorsTab, PolarMotorsTab
 from src.procedures import B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement
 from src.classes    import log
-from src.classes.data_archive import append_lab_notebook, copy_file, LAB_NOTEBOOK_FILENAME
+from src.classes.data_archive import (
+    append_lab_notebook, copy_file, LAB_NOTEBOOK_FILENAME, PARAM_TO_COLUMN,
+)
 
 # ── DLL path setup ────────────────────────────────────────────────────────────
 
@@ -148,10 +150,6 @@ class MainWindow(UIWindow):
         date_folder = now.strftime("%Y-%m-%d")
 
         try:
-            params = "; ".join(f"{k}={p.value}" for k, p in procedure.parameter_objects().items())
-        except Exception:
-            params = ""
-        try:
             duration = round(time.time() - getattr(self, "_run_start", time.time()), 1)
         except Exception:
             duration = ""
@@ -160,18 +158,25 @@ class MainWindow(UIWindow):
             total_points = ""
 
         row = {
-            "Date":         now.strftime("%Y-%m-%d"),
-            "Time":         now.strftime("%H:%M:%S"),
-            "Scan type":    getattr(procedure, "name", type(procedure).__name__),
-            "Sample ID":    self.sample_name_line.text(),
-            "Operator":     operator,
-            "Geometry":     "LMOKE" if self._setup_mode == "longitudinal" else "PMOKE",
-            "Stage type":   "Thorlabs" if self._setup_mode == "longitudinal" else "Trinamic",
-            "Total points": total_points,
-            "Duration (s)": duration,
-            "File path":    src_file,
-            "Parameters":   params,
+            "Date":                      now.strftime("%Y-%m-%d"),
+            "Time":                      now.strftime("%H:%M:%S"),
+            "Scan type":                 getattr(procedure, "name", type(procedure).__name__),
+            "Sample ID":                 self.sample_name_line.text(),
+            "Operator":                  operator,
+            "Geometry":                  "LMOKE" if self._setup_mode == "longitudinal" else "PMOKE",
+            "Stage type":                "Thorlabs" if self._setup_mode == "longitudinal" else "Trinamic",
+            "Total points":              total_points,
+            "Measurement duration (s)":  duration,
+            "File path":                 src_file,
         }
+        # Fill the measurement settings into their named columns.
+        try:
+            for pname, pobj in procedure.parameter_objects().items():
+                column = PARAM_TO_COLUMN.get(pname)
+                if column:
+                    row[column] = pobj.value
+        except Exception:
+            pass
 
         # Local lab notebook: <Desktop>/lab notebook/lab_notebook_MINImoke.csv
         try:
@@ -194,8 +199,8 @@ class MainWindow(UIWindow):
             except Exception as exc:
                 log.warning(f"Could not copy data to server '{dest_dir}': {exc}")
         try:
-            append_lab_notebook(
-                os.path.join(server_base, "lab notebook", LAB_NOTEBOOK_FILENAME), row)
+            # Directly in the server base (Z:\projects\MOKE_mini\lab_notebook_MINImoke.csv).
+            append_lab_notebook(os.path.join(server_base, LAB_NOTEBOOK_FILENAME), row)
         except Exception as exc:
             log.warning(f"Could not update server lab notebook: {exc}")
 

@@ -398,10 +398,21 @@ def test_archive_experiment_writes_local_notebook_and_server_copies():
     )
     moke_main.MainWindow._archive_experiment(fake_self, FakeExp())
 
-    assert os.path.exists(os.path.join(d, "Desktop", "lab notebook", "lab_notebook_MINImoke.csv"))
+    local_nb = os.path.join(d, "Desktop", "lab notebook", "lab_notebook_MINImoke.csv")
+    assert os.path.exists(local_nb)
     assert glob.glob(os.path.join(server, "Data", "*", "longitudinal", "*.csv")), "no general server copy"
     assert glob.glob(os.path.join(server, "Jakub", "Data", "*", "longitudinal", "*.csv")), "no per-operator copy"
-    assert os.path.exists(os.path.join(server, "lab notebook", "lab_notebook_MINImoke.csv"))
+    # Server lab notebook sits directly in the server base now.
+    assert os.path.exists(os.path.join(server, "lab_notebook_MINImoke.csv"))
+
+    # Parameters are written into their named columns.
+    import csv as _csv
+    with open(local_nb, newline="") as f:
+        rec = next(_csv.DictReader(f))
+    assert rec["Scan type"] == "B-Sweep"
+    assert rec["Operator"] == "Jakub"
+    assert rec["Field start (A)"] == "-0.5" and rec["Field stop (A)"] == "0.5"
+    assert rec["Geometry"] == "LMOKE"
 
 
 def test_loop_connect_breaks_between_loops():

@@ -26,6 +26,7 @@ from pymeasure.display.widgets import (
     BrowserWidget,
     InputsWidget,
     LogWidget,
+    ImageWidget,
 )
 from qtpy.QtWidgets import QLineEdit as DirectoryLineEdit
 from pymeasure.experiment import Results
@@ -498,10 +499,12 @@ class UIWindowBase(QtWidgets.QMainWindow):
             experiment = self.manager.experiments.with_browser_item(item)
             if state == QtCore.Qt.CheckState.Unchecked:
                 for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                    wdg.remove(curve)
+                    if curve is not None:
+                        wdg.remove(curve)
             else:
                 for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                    wdg.load(curve)
+                    if curve is not None:
+                        wdg.load(curve)
 
     def browser_item_menu(self, position):
         item = self.browser.itemAt(position)
@@ -680,7 +683,8 @@ class UIWindowBase(QtWidgets.QMainWindow):
             pixelmap.fill(color)
             experiment.browser_item.setIcon(0, QtGui.QIcon(pixelmap))
             for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                wdg.set_color(curve, color=color)
+                if curve is not None:
+                    wdg.set_color(curve, color=color)
 
     def open_file_externally(self, filename):
         """ Method to open the datafile using an external editor or viewer. Uses the default
@@ -710,6 +714,13 @@ class UIWindowBase(QtWidgets.QMainWindow):
         return procedure
 
     def new_curve(self, wdg, results, color=None, **kwargs):
+        # The 2D map (ImageWidget) can only render procedures that declare a grid
+        # via '<x-axis>_start/_end/_step' attributes (i.e. the XY grid scan).  For
+        # every other procedure it produces no image curve; None keeps the curve
+        # list index-aligned with widget_list, and the manager guards None curves.
+        if isinstance(wdg, ImageWidget):
+            if not hasattr(results.procedure, wdg.x_axis + "_start"):
+                return None
         if color is None:
             color = pg.intColor(self.browser.topLevelItemCount() % 8)
         return wdg.new_curve(results, color=color, **kwargs)
@@ -838,9 +849,25 @@ class UIWindow(UIWindowBase):
                                                self.x_axis, self.y_axis, linewidth=linewidth)
         self.plot_widget.setMinimumSize(100, 200)
 
+        # 2D colour map for the grid scan (XY-Sweep).  The X/Y position axes are
+        # fixed; the colour (z) axis is user-selectable and defaults to the DC
+        # balance signal.  Only procedures that declare a grid contribute an image
+        # curve (see new_curve); the others simply leave the map empty.
+        self.image_widget = None
+        map_x, map_y, map_z = "X Position (m)", "Y Position (m)", "Voltage DC (V)"
+        if map_x in all_columns and map_y in all_columns:
+            self.image_widget = ImageWidget(
+                "2D Map", all_columns, map_x, map_y,
+                z_axis=map_z if map_z in all_columns else None)
+            self.image_widget.setMinimumSize(100, 200)
+
         if "widget_list" not in kwargs:
             kwargs["widget_list"] = ()
-        kwargs["widget_list"] = kwargs["widget_list"] + (self.plot_widget, self.log_widget)
+        extra = (self.plot_widget,)
+        if self.image_widget is not None:
+            extra += (self.image_widget,)
+        extra += (self.log_widget,)
+        kwargs["widget_list"] = kwargs["widget_list"] + extra
 
         super().__init__(procedure_class, **kwargs)
         self.directory = "C:/Users/intermag/Desktop/Data"

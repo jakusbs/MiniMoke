@@ -6,6 +6,15 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **2D colour map for the XY grid scan.** The results panel gained a "2D Map"
+  tab (pymeasure `ImageWidget`) that renders the XY grid as a colour map instead
+  of overlapping line traces. The `XY_Sweep` exposes the grid extent
+  (`X/Y Position (m)_start/_end/_step`, in metres) that `ResultsImage` reads;
+  the step is the *actual* linspace spacing (`span/(N-1)`), so every image cell
+  lines up with a scan point even when the requested step doesn't divide the
+  range evenly. The colour (z) axis is user-selectable (defaults to
+  `Voltage DC (V)`). Line and map update live side by side; procedures that are
+  not a grid (B/X/Y/Time) contribute no image curve and leave the map empty.
 - **Single lock-in session.** `meas` and `dsp` now refer to one `Ametek7270`
   instance (was two VISA sessions to the same instrument).
 - **Explicit lock-in reference mode.** X/Y/XY sweeps select dual-harmonic mode

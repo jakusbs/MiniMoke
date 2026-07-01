@@ -74,16 +74,22 @@ class XY_Sweep(PositionSweep):
                                 units='V', default=section.get("cst_out", 0), minimum=0, maximum=2,
                                 group_by='demod', group_condition=lambda v: v == 'None' or 'AC_Output1' in v)
 
+    @staticmethod
+    def _axis_points(lo, hi, step) -> int:
+        """Number of scan points on one axis (single source of truth for both
+        the scan grid and the 2D-map grid, so the two can never disagree)."""
+        if not step:
+            return 1
+        return int(np.abs(hi - lo) // step + 1)
+
     def _configure_scan(self):
         # Grid scan.  Order: x outer, field-direction middle, y inner — i.e. at
         # each x and each field direction, sweep all of y.  Iteration = x-index
         # (kept as in the original to preserve the saved-data semantics).
-        self.x_values = np.linspace(self.x_min, self.x_max,
-                                    int(np.abs(self.x_max - self.x_min) // self.x_step + 1),
-                                    endpoint=True)
-        self.y_values = np.linspace(self.y_min, self.y_max,
-                                    int(np.abs(self.y_max - self.y_min) // self.y_step + 1),
-                                    endpoint=True)
+        nx = self._axis_points(self.x_min, self.x_max, self.x_step)
+        ny = self._axis_points(self.y_min, self.y_max, self.y_step)
+        self.x_values = np.linspace(self.x_min, self.x_max, nx, endpoint=True)
+        self.y_values = np.linspace(self.y_min, self.y_max, ny, endpoint=True)
         # Each y-sweep (fixed x, fixed field direction) is one loop in the plot.
         field_seq = [self.b, -self.b] * int(self.repeat_num)
         n_dir = len(field_seq)
@@ -94,3 +100,38 @@ class XY_Sweep(PositionSweep):
 
         self.exp_type_md = "Sweep along x and y (grid)"
         self.nb_it_md    = len(self.x_values) * len(self.y_values)
+
+    # ── 2D-map grid bounds ────────────────────────────────────────────────────
+    # The results "2D Map" tab uses pymeasure's ImageWidget / ResultsImage, which
+    # reads the grid extent from attributes named "<column>_start/_end/_step" in
+    # that column's own units (positions are recorded in metres, so the mm
+    # parameters are converted).  The step is the *actual* linspace spacing
+    # (span / (N-1)), not the requested x_step, so every image cell lines up with
+    # a scan point even when the step does not divide the range evenly.
+    #
+    # These are exposed lazily via __getattr__ so they are correct both for a
+    # live queue (GUI values) and for a re-opened data file (values restored by
+    # Results.load) — in neither case need startup() have run.  __getattr__ only
+    # fires for names normal lookup misses, so it never shadows the parameters.
+    _MAP_AXES = {
+        "X Position (m)": ("x_min", "x_max", "x_step"),
+        "Y Position (m)": ("y_min", "y_max", "y_step"),
+    }
+
+    def _grid_bounds(self, lo, hi, step):
+        """(start, end, step) in the axis' mm units, sized to one cell per point."""
+        n = self._axis_points(lo, hi, step)
+        start, end = min(lo, hi), max(lo, hi)
+        span = end - start
+        grid_step = span / (n - 1) if n > 1 and span else (abs(step) or 1.0)
+        return start, end, grid_step
+
+    def __getattr__(self, name):
+        for col, (lo, hi, st) in XY_Sweep._MAP_AXES.items():
+            for idx, suffix in enumerate(("_start", "_end", "_step")):
+                if name == col + suffix:
+                    bounds = self._grid_bounds(getattr(self, lo),
+                                               getattr(self, hi),
+                                               getattr(self, st))
+                    return bounds[idx] / 1000.0
+        raise AttributeError(name)

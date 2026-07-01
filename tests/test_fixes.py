@@ -789,6 +789,54 @@ def test_sweep_visit_order_preserved():
     ]
 
 
+def test_xy_sweep_exposes_grid_bounds_for_2d_map():
+    """XY-Sweep must expose the grid extent the 2D-map reads
+    ('<col>_start/_end/_step', in metres), stepped to match the scan; 1D and
+    field sweeps must NOT look like a grid (so the map skips them)."""
+    from src.procedures import XY_Sweep, X_Sweep, Y_Sweep, B_Sweep, TimeMeasurement
+
+    p = XY_Sweep()
+    p.x_min, p.x_max, p.x_step = 0.0, 0.05, 0.02      # 3 points, spacing 0.025 mm
+    p.y_min, p.y_max, p.y_step = 0.2, 0.0, 0.01       # reversed range
+
+    # Bounds are metres, normalised so start <= end regardless of scan direction.
+    assert getattr(p, "X Position (m)_start") == 0.0
+    assert abs(getattr(p, "X Position (m)_end") - 0.05 / 1000) < 1e-15
+    # Step is the ACTUAL linspace spacing (span/(N-1)), not the requested x_step,
+    # so every image cell lines up with a scan point.
+    assert abs(getattr(p, "X Position (m)_step") - (0.05 / 2) / 1000) < 1e-15
+    assert getattr(p, "Y Position (m)_start") == 0.0                 # min(0.2, 0)
+    assert abs(getattr(p, "Y Position (m)_end") - 0.2 / 1000) < 1e-15
+
+    for cls in (X_Sweep, Y_Sweep, B_Sweep, TimeMeasurement):
+        assert not hasattr(cls(), "X Position (m)_start"), cls.__name__
+
+
+def test_2d_map_builds_image_sized_to_the_grid():
+    """The 2D-map ImageWidget must build a pymeasure ResultsImage whose grid has
+    exactly one cell per XY scan point (no empty margin row/column)."""
+    import pandas as pd
+    from pymeasure.display.widgets import ImageWidget
+    from pymeasure.display.curves import ResultsImage
+    from src.procedures import XY_Sweep
+
+    p = XY_Sweep()
+    p.x_min, p.x_max, p.x_step = 0.0, 0.05, 0.02
+    p.y_min, p.y_max, p.y_step = 0.0, 0.04, 0.01
+    p._configure_scan()
+    nx, ny = len(p.x_values), len(p.y_values)
+
+    class FakeResults:
+        procedure = p
+        data = pd.DataFrame(columns=XY_Sweep.DATA_COLUMNS)
+
+    iw = ImageWidget("2D Map", XY_Sweep.DATA_COLUMNS,
+                     "X Position (m)", "Y Position (m)", z_axis="Voltage DC (V)")
+    img = iw.new_curve(FakeResults())
+    assert isinstance(img, ResultsImage)
+    assert (img.xsize, img.ysize) == (nx, ny), (img.xsize, img.ysize, nx, ny)
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

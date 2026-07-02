@@ -306,6 +306,49 @@ def test_b_sweep_rejects_too_fast_for_hall():
     assert p.queue_validation_error() is None, "a slow enough sweep must pass"
 
 
+def test_b_sweep_lockin_uses_current_modulation_not_chopper():
+    """B-Sweep LockIn must use the position-sweep lock-in scheme — dual-harmonic
+    reference mode with first-harmonic reads (meas.x1/...) — not an external
+    chopper, and must average the signed X (the physical hysteresis loop)."""
+    import src.procedures.b_sweep_chopper as bsl
+    fakes = _patch_proc_module(bsl, hall_val=10.0)
+
+    # No chopper knob any more; a lock-in reference frequency instead.
+    assert not hasattr(bsl.B_Sweep_Lockin, "chopper_freq")
+    assert hasattr(bsl.B_Sweep_Lockin, "lockin_freq")
+
+    modes = []
+    fakes["dsp"].set_reference_mode = lambda mode=0: modes.append(mode)
+    # Distinct values so first-harmonic reads (x1) are told apart from single-ref (x).
+    fakes["meas"].x1, fakes["meas"].y1 = 1.0, 2.0
+    fakes["meas"].mag1, fakes["meas"].theta1 = 3.0, 4.0
+    fakes["meas"].x = -99.0     # single-reference read must NOT be used
+
+    p = bsl.B_Sweep_Lockin()
+    p.set_sample_name("t")
+    p.b_min, p.b_max, p.b_step = -0.02, 0.02, 0.01
+    p.num_sweeps = 1
+    p.sweep_freq = 0.1
+    p.time_const, p.acq_time = 0.0001, 0.001
+    p.demod = "None"
+
+    records = []
+    p.emit = lambda topic, rec=None, **k: records.append(rec) if topic == "results" else None
+    p.should_stop = lambda: False
+
+    p.startup()
+    assert 1 in modes and 0 not in modes, f"must use dual-harmonic reference mode: {modes}"
+
+    p.execute()
+    live = [r for r in records if not np.isnan(r["Voltage X 1f (V)"])]
+    assert live, "no live lock-in points emitted"
+    assert live[0]["Voltage X 1f (V)"] == 1.0      # from meas.x1, not meas.x
+    assert live[0]["Voltage R 1f (V)"] == 3.0
+    # The averaged loop carries the signed X average (the physical hysteresis loop).
+    avg = [r for r in records if not np.isnan(r["Voltage X Average (V)"])]
+    assert avg and avg[0]["Voltage X Average (V)"] == 1.0
+
+
 def test_live_readout_push_updates_and_keeps_last_good_field():
     """The Live tab snapshot updates every point, but a NaN/None field (fast
     field sweeps) must not blank the field card."""

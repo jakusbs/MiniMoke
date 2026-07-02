@@ -6,6 +6,14 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **B-Sweep LockIn uses the current-modulation scheme (not a chopper).** The
+  lock-in hysteresis loop now configures the DAC modulation and reads the lock-in
+  first-harmonic outputs (dual-harmonic reference mode, `meas.x1/y1/mag1/theta1`)
+  exactly like the X/Y/XY sweeps, instead of assuming an external optical chopper
+  (single reference mode + AQN auto-phase). It also averages the **signed** X
+  (`Voltage X Average (V)`) in addition to R — R is a magnitude and can't show a
+  hysteresis loop's sign flip, so averaging only R was wrong for a loop. (The
+  file is still named `b_sweep_chopper.py`; only the behaviour changed.)
 - **Positions are in micrometres.** All X/Y position parameters (scan
   start/stop/step and the fixed spot position), the recorded position columns
   (`X/Y Position (um)`), and the plot/2D-map axes are now micrometres — the

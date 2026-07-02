@@ -5,6 +5,7 @@ from pymeasure.experiment import (
     Procedure,
     FloatParameter,
     IntegerParameter,
+    ListParameter,
     Metadata,
 )
 
@@ -18,16 +19,19 @@ from src.classes import live_readout
 # Constants
 # ---------------------------------------------------------------------------
 HALL_MIN_ACQ_S      = 0.002     # minimum hall-sensor acquisition time (2 ms)
-DAC_SAMPLING_RATE   = 50_000.0  # samples/s for DAC acquisition
 SETTLE_TC_MULTIPLES = 5         # number of time-constants to wait after field step
                                  # for the lock-in output to settle (5τ → <1 % error)
 
 
 class B_Sweep_Lockin(Procedure):
     """
-    Hysteresis-loop procedure (B-Sweep) using the external chopper + lock-in
-    amplifier.  Forwards and backward branches are accumulated separately;
-    averaged results are emitted once at the end.
+    Hysteresis-loop procedure (B-Sweep) with lock-in detection.
+
+    Uses the same current-modulation lock-in scheme as the X/Y/XY position
+    sweeps: the DAC drives the modulation (sample current) and the lock-in is
+    read in dual-harmonic reference mode (first-harmonic X/Y/R/θ), rather than
+    an external optical chopper.  Forward and backward branches are accumulated
+    separately; the averaged loop is emitted once at the end.
     """
     name = "B-Sweep LockIn"
     DEFAULT_X_AXIS = "Magnetic Field (T)"   # plot x-axis when this tab is open
@@ -43,6 +47,11 @@ class B_Sweep_Lockin(Procedure):
     )
 
     section = proc_config.get_section(name)
+
+    # DAC AC output channels (used for the current modulation, same as X/Y/XY).
+    AC_ports = dac_config.get_section('IO ports')
+    AC_chan  = [f'AC_Output1 ({AC_ports.get("AC_Output1", "None")})',
+                f'AC_Output2 ({AC_ports.get("AC_Output2", "None")})', 'None']
 
     # ── Field sweep parameters ────────────────────────────────────────────────
     b_min      = FloatParameter(
@@ -66,18 +75,18 @@ class B_Sweep_Lockin(Procedure):
         default=section.get("num_sweeps", 5),   minimum=1, maximum=1000,
     )
 
-    # ── Lock-in / chopper parameters ──────────────────────────────────────────
-    chopper_freq = FloatParameter(
-        "Chopper / Lock-in reference frequency", units="Hz",
-        default=section.get("chopper_freq", 1777), minimum=1, maximum=102000,
-    )
+    # ── Lock-in parameters (current modulation, same scheme as X/Y/XY) ─────────
     volt         = FloatParameter(
         "Lock-in output voltage",  units="V",
-        default=section.get("volt", 0.0),            minimum=0,     maximum=5,
+        default=section.get("volt", 1.0),            minimum=0,     maximum=5,
     )
     sensi        = FloatParameter(
         "Lock-in sensitivity",     units="V",
         default=section.get("sensi", 500e-6),        minimum=1e-9,  maximum=1,
+    )
+    lockin_freq  = FloatParameter(
+        "Lock-in reference frequency", units="Hz",
+        default=section.get("lockin_freq", 1777),    minimum=1,     maximum=102000,
     )
     time_const   = FloatParameter(
         "Lock-in time constant",   units="s",
@@ -91,6 +100,21 @@ class B_Sweep_Lockin(Procedure):
         "DAC acquisition time",    units="s",
         default=section.get("acq_time", 0.1),        minimum=1e-6,
     )
+
+    # ── Modulation parameters (DAC-driven, identical defaults to X/Y/XY) ────────
+    # Not shown in the input panel; they use the same defaults as the position
+    # sweeps so the acquisition matches "the Y sweep" exactly.
+    freq    = FloatParameter('Field modulation Freq', units='Hz',
+                             default=section.get("freq", 1777), minimum=1, maximum=1e5)
+    demod   = ListParameter('Modulation channel', AC_chan, default=section.get("demod", AC_chan[0]))
+    mod_amp = FloatParameter('Modulation amplitude', units='V',
+                             default=section.get("mod_amp", 1), minimum=0, maximum=2)
+    rate    = FloatParameter('Sampling rate', units='Hz',
+                             default=section.get("rate", 50000), minimum=10, maximum=1.25e6)
+    cst_out1 = FloatParameter('Constant output 1', units='V',
+                              default=section.get("cst_out1", 0), minimum=0, maximum=2)
+    cst_out2 = FloatParameter('Constant output 2', units='V',
+                              default=section.get("cst_out2", 0), minimum=0, maximum=2)
 
     # Position parameters (not shown in main input list but stored in data)
     x = FloatParameter("Position x", units="um", default=section.get("x", 0.0))
@@ -109,7 +133,8 @@ class B_Sweep_Lockin(Procedure):
         "Voltage theta 1f (V)",
         "Voltage DC (V)",           # live: DC mean from current sweep
         "Voltage DC Average (V)",   # emitted once at end: averaged DC
-        "Voltage R Average (V)",    # emitted once at end: averaged lock-in R
+        "Voltage X Average (V)",    # emitted once at end: averaged lock-in X (signed)
+        "Voltage R Average (V)",    # emitted once at end: averaged lock-in R (magnitude)
         "Intensity (V)",
         "Intensity STD (V)",
         "Loop",                     # loop index — used by the plot to break the line
@@ -200,46 +225,39 @@ class B_Sweep_Lockin(Procedure):
         )
 
         # ── Metadata ─────────────────────────────────────────────────────────
-        self.exp_type_md  = "Hysteresis loop — external chopper + lock-in"
+        self.exp_type_md  = "Hysteresis loop — lock-in (current modulation)"
         self.sample_md    = self.sample_name
         self.nb_it_md     = n_total
         self.nb_sweeps_md = self.num_sweeps
 
-        # ── Configure lock-in amplifier ───────────────────────────────────────
-        # Put the instrument in single reference mode (REFMODE 0) first.
-        # This is required so that X./Y./MAG./PHA. commands are valid.
-        # In dual harmonic mode (REFMODE 1/2) those commands return empty strings,
-        # causing the ValueError seen in the traceback.
-        dsp.set_reference_mode(0)
-        log.info("Lock-in set to single reference mode (REFMODE 0).")
+        # ── Configure DAC modulation (current modulation, same as X/Y/XY) ──────
+        # The DAC drives the modulation on the chosen AC output; the lock-in then
+        # reads the first-harmonic component synchronous with it.
+        dac.setup_aquisition(
+            modulation_channel = self.demod,
+            frequency          = self.freq,
+            acquisition_time   = self.acq_time,
+            sampling_rate      = self.rate,
+            modulation_amp     = self.mod_amp,
+        )
 
-        # The lock-in is set to the chopper frequency so it demodulates only the
-        # component synchronous with the chopped beam.  The oscillator output
-        # voltage is set to `volt` (typically 0 V when the chopper reference
-        # is a TTL input rather than the lock-in's own oscillator output).
+        # ── Configure lock-in amplifier ───────────────────────────────────────
+        # Dual-harmonic reference mode (REFMODE 1) so the first-harmonic reads
+        # X1./Y1./MAG1./PHA1. (meas.x1/y1/mag1/theta1) are valid — the same reads
+        # the position sweeps use.  Set explicitly so the run never depends on
+        # whatever mode the instrument was last left in.
+        dsp.set_reference_mode(1)
         dsp.setup_lockin_condition(
             lockin_voltage       = self.volt,
             lockin_sensitivity   = self.sensi,
-            lockin_frequency     = self.chopper_freq,
+            lockin_frequency     = self.lockin_freq,
             lockin_time_constant = self.time_const,
             lockin_phase         = self.phase,
         )
         log.info(
-            f"Lock-in configured: f={self.chopper_freq} Hz, "
+            f"Lock-in configured (dual-harmonic): f={self.lockin_freq} Hz, "
             f"sensi={self.sensi*1e6:.1f} µV, τ={self.time_const*1e3:.1f} ms, "
             f"phase={self.phase}°"
-        )
-
-        # ── Configure DAC (no modulation — field only) ────────────────────────
-        # The DAC output channels are used only for the coil current.
-        # No sinusoidal modulation is generated by the DAC because the chopper
-        # provides the optical modulation externally.
-        dac.setup_aquisition(
-            modulation_channel = "None",
-            frequency          = self.chopper_freq,  # kept for reference-signal arrays
-            acquisition_time   = self.acq_time,
-            sampling_rate      = DAC_SAMPLING_RATE,
-            modulation_amp     = 0.0,
         )
 
         # ── Stage and initial field ───────────────────────────────────────────
@@ -254,26 +272,15 @@ class B_Sweep_Lockin(Procedure):
         stage.wait_stable()
 
         dac.coils_output = self.b_min
-
-        # ── Auto-phase the lock-in ────────────────────────────────────────────
-        # Issue AQN (auto-quadrature null) so the instrument rotates its phase
-        # reference until the Y channel is zeroed.  We wait long enough for the
-        # lock-in output to settle after the command (5 × τ) before the sweep
-        # starts, so the first data point is not contaminated by the transient.
-        autophase_settle_s = SETTLE_TC_MULTIPLES * self.time_const
-        log.info(
-            f"Running lock-in auto-phase (AQN), "
-            f"then waiting {autophase_settle_s*1e3:.0f} ms for output to settle..."
-        )
-        dsp.ask("AQN")
-        time.sleep(autophase_settle_s)
-        log.info("Auto-phase complete.")
+        dac.dc_output    = [self.cst_out1, self.cst_out2]
 
         # ── Accumulators (forward / backward, separate) ───────────────────────
         self._fwd_dc_sum = np.zeros(n_fwd)
-        self._fwd_r_sum  = np.zeros(n_fwd)
+        self._fwd_x_sum  = np.zeros(n_fwd)   # signed lock-in X (the hysteresis loop)
+        self._fwd_r_sum  = np.zeros(n_fwd)   # lock-in R (magnitude)
         self._fwd_b_sum  = np.zeros(n_fwd)
         self._bwd_dc_sum = np.zeros(n_bwd)
+        self._bwd_x_sum  = np.zeros(n_bwd)
         self._bwd_r_sum  = np.zeros(n_bwd)
         self._bwd_b_sum  = np.zeros(n_bwd)
         self._sweeps_completed = 0
@@ -286,8 +293,8 @@ class B_Sweep_Lockin(Procedure):
         X/Y/R/θ plus DAC DC/intensity channels.  Sleep until `deadline`.
 
         The lock-in must settle for SETTLE_TC_MULTIPLES × time_const after the
-        field (and hence the MOKE signal) changes.  The DAC acquisition window
-        runs concurrently with this settle period to make the best use of time.
+        field (and hence the MOKE signal) changes; the DAC acquisition window
+        then runs concurrently with the (non-blocking) lock-in reads.
 
         Returns
         -------
@@ -315,15 +322,13 @@ class B_Sweep_Lockin(Procedure):
         # so the lock-in reads happen in parallel with the DAC sampling window.
         dac.start_tasks()
 
-        # Read lock-in outputs (Ametek 7270 returns settled values at this point).
-        # In single reference mode (REFMODE 0) the correct commands are:
-        #   X. / Y. / MAG. / PHA.     <- single reference mode  (correct)
-        #   X1. / Y1. / MAG1. / PHA1. <- dual harmonic only     (returns empty -> ValueError)
-        # set_reference_mode(0) is called in startup() to guarantee this state.
-        lockin_x     = meas.x
-        lockin_y     = meas.y
-        lockin_r     = meas.mag       # MAG. -- single reference mode
-        lockin_theta = meas.theta     # PHA. -- single reference mode
+        # Read the lock-in's first-harmonic outputs (X1./Y1./MAG1./PHA1.), which
+        # are valid in the dual-harmonic reference mode set in startup() — the
+        # same reads the X/Y/XY position sweeps use.
+        lockin_x     = meas.x1
+        lockin_y     = meas.y1
+        lockin_r     = meas.mag1
+        lockin_theta = meas.theta1
 
         # Wait for DAC acquisition to finish and collect ADC data
         balanced_data, intensity_data = dac.read_data()
@@ -370,9 +375,11 @@ class B_Sweep_Lockin(Procedure):
             log.info(f"Sweep {sweep_num + 1}/{self.num_sweeps}")
 
             sweep_fwd_dc = np.zeros(n_fwd)
+            sweep_fwd_x  = np.zeros(n_fwd)
             sweep_fwd_r  = np.zeros(n_fwd)
             sweep_fwd_b  = np.zeros(n_fwd)
             sweep_bwd_dc = np.zeros(n_bwd)
+            sweep_bwd_x  = np.zeros(n_bwd)
             sweep_bwd_r  = np.zeros(n_bwd)
             sweep_bwd_b  = np.zeros(n_bwd)
 
@@ -385,6 +392,7 @@ class B_Sweep_Lockin(Procedure):
                  vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
 
                 sweep_fwd_dc[i] = vdc
+                sweep_fwd_x[i]  = lx
                 sweep_fwd_r[i]  = lr
                 sweep_fwd_b[i]  = B_mT   # may be NaN in fast mode
 
@@ -402,6 +410,7 @@ class B_Sweep_Lockin(Procedure):
                     "Voltage theta 1f (V)":   lt,
                     "Voltage DC (V)":         vdc,
                     "Voltage DC Average (V)": float("nan"),
+                    "Voltage X Average (V)":  float("nan"),
                     "Voltage R Average (V)":  float("nan"),
                     "Intensity (V)":          inten,
                     "Intensity STD (V)":      inten_std,
@@ -421,6 +430,7 @@ class B_Sweep_Lockin(Procedure):
                  vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
 
                 sweep_bwd_dc[j] = vdc
+                sweep_bwd_x[j]  = lx
                 sweep_bwd_r[j]  = lr
                 sweep_bwd_b[j]  = B_mT
 
@@ -438,6 +448,7 @@ class B_Sweep_Lockin(Procedure):
                     "Voltage theta 1f (V)":   lt,
                     "Voltage DC (V)":         vdc,
                     "Voltage DC Average (V)": float("nan"),
+                    "Voltage X Average (V)":  float("nan"),
                     "Voltage R Average (V)":  float("nan"),
                     "Intensity (V)":          inten,
                     "Intensity STD (V)":      inten_std,
@@ -449,8 +460,10 @@ class B_Sweep_Lockin(Procedure):
 
             # Accumulate branch sums
             self._fwd_dc_sum += sweep_fwd_dc
+            self._fwd_x_sum  += sweep_fwd_x
             self._fwd_r_sum  += sweep_fwd_r
             self._bwd_dc_sum += sweep_bwd_dc
+            self._bwd_x_sum  += sweep_bwd_x
             self._bwd_r_sum  += sweep_bwd_r
             if self._hall_live:
                 self._fwd_b_sum += sweep_fwd_b
@@ -514,6 +527,7 @@ class B_Sweep_Lockin(Procedure):
                 "Voltage theta 1f (V)":   float("nan"),
                 "Voltage DC (V)":         float("nan"),
                 "Voltage DC Average (V)": self._fwd_dc_sum[i] / n,
+                "Voltage X Average (V)":  self._fwd_x_sum[i]  / n,
                 "Voltage R Average (V)":  self._fwd_r_sum[i]  / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      float("nan"),
@@ -534,6 +548,7 @@ class B_Sweep_Lockin(Procedure):
                 "Voltage theta 1f (V)":   float("nan"),
                 "Voltage DC (V)":         float("nan"),
                 "Voltage DC Average (V)": self._bwd_dc_sum[j] / n,
+                "Voltage X Average (V)":  self._bwd_x_sum[j]  / n,
                 "Voltage R Average (V)":  self._bwd_r_sum[j]  / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      float("nan"),

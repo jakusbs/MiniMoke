@@ -87,7 +87,7 @@ class MainWindow(UIWindow):
             procedure_class=[B_Sweep, B_Sweep_Lockin, X_Sweep, Y_Sweep, XY_Sweep, TimeMeasurement],
             inputs=[
                 ['b_min', 'b_max', 'b_step', 'sweep_freq', 'num_sweeps'],
-                ['b_min', 'b_max', 'b_step', 'sweep_freq', 'num_sweeps', 'chopper_freq', 'volt', 'sensi', 'time_const', 'phase', 'acq_time'],
+                ['b_min', 'b_max', 'b_step', 'sweep_freq', 'num_sweeps', 'volt', 'sensi', 'lockin_freq', 'time_const', 'phase', 'acq_time'],
                 ['volt', 'sensi', 'lockin_freq', 'time_const', 'phase', 'acq_time',
                  'x_min', 'x_max', 'x_step', 'y', 'b', 'repeat_num'],
                 ['volt', 'sensi', 'lockin_freq', 'time_const', 'phase', 'acq_time',

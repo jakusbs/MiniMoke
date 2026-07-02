@@ -181,8 +181,7 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     def __init__(self, name, parent=None):
         super().__init__(parent)
         self.name = name
-        self._worker = None        # keep reference so it isn't GC'd mid-move
-        self._queue = []           # pending jog/move requests (FIFO)
+        self._worker = None        # current move; kept so it isn't GC'd mid-move
         self._WORKER_CLS = _MoveWorker   # injectable for testing
         self._build()
 
@@ -289,31 +288,25 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def _dispatch(self, fn, *args):
-        """Queue fn(*args) to run in a background thread, refreshing the display
-        when each move finishes.
+        """Run fn(*args) in a background thread, refreshing the display when the
+        move finishes.
 
-        Requests are queued FIFO and executed one at a time, so rapid clicks on
-        the jog arrows are never dropped — every click is applied, in order.
-        (Previously a click was silently discarded if a move was still running.)
+        A new move is only started once the previous one has finished; clicks
+        that arrive while the stage is still moving are ignored (not queued).
+        A FIFO queue was tried first, but for the fast axes rapid clicks piled up
+        faster than the stage could move, so it kept jogging long after the user
+        stopped.  Dropping the extra clicks keeps the jog responsive and never
+        lets a backlog build up — the user just clicks again once it has settled.
         """
-        self._queue.append((fn, args))
-        self._maybe_start_next()
-
-    def _maybe_start_next(self):
-        """Start the next queued move if none is currently running."""
         if self._worker is not None and self._worker.isRunning():
-            return
-        if not self._queue:
-            return
-        fn, args = self._queue.pop(0)
+            return                       # busy -> ignore this click
         self._worker = self._WORKER_CLS(fn, *args)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_worker_finished(self):
-        """Refresh the readout, then run the next queued move (if any)."""
+        """Refresh the readout once the move completes."""
         self._safe_update_positions()
-        self._maybe_start_next()
 
     def move_x(self, d): self._dispatch(stage.move_x, d)
     def move_y(self, d): self._dispatch(stage.move_y, d)

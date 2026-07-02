@@ -589,8 +589,10 @@ def test_procedure_shutdown_always_releases_hardware():
     assert fakes["hall_sensor"].reserved is False, "Hall stayed reserved -> live tab frozen"
 
 
-def test_motor_click_queue_applies_every_click():
-    """Rapid jog clicks must all execute in order (none dropped while moving)."""
+def test_motor_jog_ignores_clicks_while_moving():
+    """A jog only starts once the previous move has finished; clicks that arrive
+    while the stage is moving are ignored (not queued), so no backlog builds up
+    and the stage never keeps jogging after the user stops clicking."""
     from PyQt5.QtCore import QObject, pyqtSignal
     from src.ui import longitudinal_motors_tab_ui as L
 
@@ -617,19 +619,21 @@ def test_motor_click_queue_applies_every_click():
 
     def rec(label): executed.append(label)
 
-    tab._dispatch(rec, "a")     # first starts immediately
-    tab._dispatch(rec, "b")     # a still running -> queued
-    tab._dispatch(rec, "c")     # queued
-    assert len(FakeWorker.instances) == 1 and executed == []
+    tab._dispatch(rec, "a")     # free -> starts immediately
+    tab._dispatch(rec, "b")     # busy -> ignored
+    tab._dispatch(rec, "c")     # busy -> ignored
+    assert len(FakeWorker.instances) == 1, "only the first click should start a move"
+    assert executed == []
 
-    FakeWorker.instances[0].complete()   # a done -> b starts
-    assert executed == ["a"] and len(FakeWorker.instances) == 2
-    FakeWorker.instances[1].complete()   # b done -> c starts
-    assert executed == ["a", "b"] and len(FakeWorker.instances) == 3
-    FakeWorker.instances[2].complete()   # c done
+    FakeWorker.instances[0].complete()   # 'a' finishes
+    assert executed == ["a"], "the running move must complete"
 
-    assert executed == ["a", "b", "c"], "a rapid click was dropped"
-    assert tab._queue == [], "queue not drained"
+    tab._dispatch(rec, "d")     # free again -> starts
+    assert len(FakeWorker.instances) == 2, "a click after settling must start a move"
+    FakeWorker.instances[1].complete()
+
+    assert executed == ["a", "d"], "clicks during a move are dropped; next is accepted"
+    assert not hasattr(tab, "_queue"), "the click queue should be gone"
 
 
 def test_b_sweep_abort_skips_final_average():

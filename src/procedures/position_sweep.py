@@ -63,6 +63,9 @@ def read_signals(field_A) -> dict:
     }
 
 
+DAC_SAMPLING_RATE = 50_000.0    # samples/s for the DAC ADC acquisition window
+
+
 # The stages are commanded in millimetres, but every user-facing position
 # (parameters, data columns, plot/map axes) is in micrometres — easier to read
 # and type for the µm-scale moves this setup makes.  Convert only here, at the
@@ -157,10 +160,13 @@ class PositionSweep(Procedure):
         move_y_um(y0)
         stage.wait_stable()
 
-        # Setup the acquisition in the DAC with our parameters
-        dac.setup_aquisition(modulation_channel=self.demod, frequency=self.freq,
-                             acquisition_time=self.acq_time, sampling_rate=self.rate,
-                             modulation_amp=self.mod_amp)
+        # The lock-in's own oscillator provides the modulation: it outputs `volt`
+        # at `lockin_freq` (driving the sample current through the external
+        # current source).  The DAC generates NO modulation — it only drives the
+        # coil current (field) and opens the ADC window to sample the diodes.
+        dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,
+                             acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
+                             modulation_amp=0.0)
 
         # This scan reads the lock-in's first-harmonic outputs
         # (meas.x1/y1/mag1/theta1), which are only valid in dual-harmonic
@@ -172,7 +178,6 @@ class PositionSweep(Procedure):
                                    lockin_frequency=self.lockin_freq,
                                    lockin_time_constant=self.time_const, lockin_phase=self.phase)
         dac.coils_output = self.b
-        dac.dc_output    = [self.cst_out1, self.cst_out2]
 
     def _measure_point(self, item, iteration) -> dict:
         """Acquire one point and return the results row.

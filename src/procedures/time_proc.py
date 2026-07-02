@@ -37,7 +37,7 @@ class TimeMeasurement(Procedure):
 
     # ── Setpoints held constant during the trace ─────────────────────────────
     b    = FloatParameter('Field', units='A', default=section.get("b", 0.0), minimum=-6, maximum=6)
-    volt = FloatParameter('Lockin output voltage (sample current)', units='V',
+    volt = FloatParameter('Lock-in oscillator amplitude', units='V',
                           default=section.get("volt", 0.0), minimum=0, maximum=5)
 
     # ── Lock-in configuration (to read the MOKE signal) ──────────────────────

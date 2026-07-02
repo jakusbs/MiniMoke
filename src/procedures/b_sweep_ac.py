@@ -76,7 +76,7 @@ class B_Sweep_Lockin(Procedure):
     # The lock-in oscillator outputs `volt` at `lockin_freq` (the sample-current
     # modulation) and demodulates its input at that same reference.
     volt         = FloatParameter(
-        "Lock-in output voltage",  units="V",
+        "Lock-in oscillator amplitude",  units="V",
         default=section.get("volt", 1.0),            minimum=0,     maximum=5,
     )
     sensi        = FloatParameter(

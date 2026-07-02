@@ -11,9 +11,9 @@ Description:
 import time
 import numpy as np
 
-from pymeasure.experiment import FloatParameter, Metadata, ListParameter
+from pymeasure.experiment import FloatParameter, Metadata
 
-from src.classes import proc_config, dac_config
+from src.classes import proc_config
 from .position_sweep import PositionSweep
 
 
@@ -30,43 +30,23 @@ class X_Sweep(PositionSweep):
     nb_it_md    = Metadata("Total number of iterations (if success)")
     time_md     = Metadata("Beginning of experiment", fget=lambda: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())))
 
-    # Define the AC channels
-    AC_ports = dac_config.get_section('IO ports')
-    AC_chan   = [f'AC_Output1 ({AC_ports.get("AC_Output1", "None")})', f'AC_Output2 ({AC_ports.get("AC_Output2", "None")})', 'None']
-
     section = proc_config.get_section(name)             # Get the saved parameters values from the config file
 
-    # Define all the parameters with their type (float, bool), name, units and minimum and maximum
-    volt       = FloatParameter('Lockin output voltage',  units='V',   default=section.get("volt", 1.0),          minimum=0,    maximum=5)
+    # The lock-in's own oscillator provides the modulation: `volt` is the
+    # oscillator amplitude (the voltage that drives the sample current through
+    # the external current source) at `lockin_freq`.  No DAC modulation is used.
+    volt       = FloatParameter('Lock-in oscillator amplitude', units='V', default=section.get("volt", 1.0), minimum=0, maximum=5)
     sensi      = FloatParameter('Lockin sensitivity',    units='V',   default=section.get("sensi", 500.00e-6),   minimum=1.0e-6, maximum=1)
     lockin_freq= FloatParameter('Lockin frequency',       units='Hz',  default=section.get("lockin_freq", 1777),  minimum=173)
     time_const = FloatParameter('Lockin time constant',   units='s',   default=section.get("time_const", 0.5),    minimum=0.1,  maximum=10)
     phase      = FloatParameter('Lockin phase',           units='deg', default=section.get("phase", 0),           minimum=-180, maximum=180)
     acq_time   = FloatParameter('Aquisition time',        units='s',   default=section.get("acq_time", 1),        minimum=1e-6)
-    freq       = FloatParameter('Field modulation Freq',  units='Hz',  default=section.get("freq", 1777),         minimum=1,    maximum=1e5)
-    demod      = ListParameter( 'Modulation channel',     AC_chan,     default=section.get("demod", AC_chan[0]))
     x_min      = FloatParameter('From x',                 units='um',  default=section.get("x_min", 0))
     x_max      = FloatParameter('To x',                   units='um',  default=section.get("x_max", 100))
     x_step     = FloatParameter('Step',                   units='um',  default=section.get("x_step", 10))
     y          = FloatParameter('Position y',             units='um',  default=section.get("y", 0))
     b          = FloatParameter('Field ',                 units='A',   default=section.get("b", 0.),              minimum=-6,   maximum=6)
     repeat_num = FloatParameter('Repeat number ',         units='',    default=section.get("repeat_num", 5),      minimum=1,    maximum=1000)
-
-    # Only active if modulation is used
-    rate       = FloatParameter('Sampling rate',          units='Hz',  default=section.get("rate", 50000),        minimum=10,   maximum=1.25e6,
-                                group_by='demod', group_condition=lambda v: 'AC_Output1' in v or 'AC_Output2' in v)
-    lockin_bw  = FloatParameter('Lockin bandwith',        units='Hz',  default=section.get("lockin_bw", 50),      minimum=1,    maximum=1e5,
-                                group_by='demod', group_condition=lambda v: 'AC_Output1' in v or 'AC_Output2' in v)
-    mod_amp    = FloatParameter('Modulation amplitude',   units='V',   default=section.get("mod_amp", 1),         minimum=0,    maximum=2,
-                                group_by='demod', group_condition=lambda v: 'AC_Output1' in v or 'AC_Output2' in v)
-
-    # Active the correct input or the 2 of them if no modulation is required by the user
-    cst_out1   = FloatParameter(f'Constant output 1 ({AC_ports.get("AC_Output1", "None")})',
-                                units='V', default=section.get("cst_out", 0), minimum=0, maximum=2,
-                                group_by='demod', group_condition=lambda v: v == 'None' or 'AC_Output2' in v)
-    cst_out2   = FloatParameter(f'Constant output 2 ({AC_ports.get("AC_Output2", "None")})',
-                                units='V', default=section.get("cst_out", 0), minimum=0, maximum=2,
-                                group_by='demod', group_condition=lambda v: v == 'None' or 'AC_Output1' in v)
 
     def _configure_scan(self):
         # Sweep x at the fixed y; for each field direction, step through every x.

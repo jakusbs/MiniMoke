@@ -538,7 +538,6 @@ def test_xy_sweep_progress_monotonic_and_bounded():
     p.y_min, p.y_max, p.y_step = 0.0, 20.0, 10.0     # 3 y points (µm)
     p.b = 0.1
     p.repeat_num = 2
-    p.demod = "None"
     p.acq_time = 0.001
 
     progs = []
@@ -750,22 +749,36 @@ def test_single_lockin_instance():
 
 def test_x_sweep_sets_lockin_reference_mode_in_startup():
     """X/Y/XY read first-harmonic outputs, so startup must select dual-harmonic
-    reference mode (1); otherwise those reads return '' and raise mid-sweep."""
+    reference mode (1); otherwise those reads return '' and raise mid-sweep.  The
+    modulation comes from the lock-in oscillator (volt @ lockin_freq), not the
+    DAC, so the DAC must be configured with NO modulation."""
     import src.procedures.position_sweep as ps
     import src.procedures.x_sweep_proc as xsp
     fakes = _patch_proc_module(ps)     # startup/execute/shutdown live in position_sweep
 
-    calls = []
+    calls, dac_cfg, lockin_cfg = [], {}, {}
     fakes["dsp"].set_reference_mode = lambda mode=0: calls.append(mode)
+    fakes["dsp"].setup_lockin_condition = lambda **k: lockin_cfg.update(k)
+    fakes["dac"].setup_aquisition = lambda **k: dac_cfg.update(k)
+
+    # X/Y/XY no longer expose a DAC-modulation channel.
+    assert not hasattr(xsp.X_Sweep, "demod")
+    assert not hasattr(xsp.X_Sweep, "mod_amp")
 
     p = xsp.X_Sweep()
     p.set_sample_name("t")
-    p.demod = "None"
     p.acq_time = 0.001
     p.b = 0.0
+    p.volt, p.lockin_freq = 0.8, 2500.0
     p.startup()
 
     assert 1 in calls, f"dual-harmonic reference mode not set in startup: {calls}"
+    # Oscillator drives the current: amplitude = volt, frequency = lockin_freq.
+    assert lockin_cfg.get("lockin_voltage") == 0.8
+    assert lockin_cfg.get("lockin_frequency") == 2500.0
+    # No DAC modulation.
+    assert dac_cfg.get("modulation_channel") == "None"
+    assert dac_cfg.get("modulation_amp") == 0.0
 
 
 def test_time_measurement_records_time_series():
@@ -826,7 +839,7 @@ def test_sweep_visit_order_preserved():
     px.set_sample_name("t")
     px.x_min, px.x_max, px.x_step = 0.0, 10.0, 10.0    # x = [0, 10] µm
     px.y, px.b, px.repeat_num = 0.0, 0.1, 1
-    px.demod, px.acq_time = "None", 0.001
+    px.acq_time = 0.001
     assert capture(px) == [
         (0.0, 0.0,  0.1), (10.0, 0.0,  0.1),           # field +0.1, x inner
         (0.0, 0.0, -0.1), (10.0, 0.0, -0.1),           # field -0.1, x inner
@@ -837,7 +850,7 @@ def test_sweep_visit_order_preserved():
     pxy.x_min, pxy.x_max, pxy.x_step = 0.0, 10.0, 10.0  # x = [0, 10] µm
     pxy.y_min, pxy.y_max, pxy.y_step = 0.0, 10.0, 10.0  # y = [0, 10] µm
     pxy.b, pxy.repeat_num = 0.1, 1
-    pxy.demod, pxy.acq_time = "None", 0.001
+    pxy.acq_time = 0.001
     assert capture(pxy) == [
         (0.0,  0.0,  0.1), (0.0,  10.0,  0.1),          # x=0, +0.1, y inner
         (0.0,  0.0, -0.1), (0.0,  10.0, -0.1),          # x=0, -0.1, y inner

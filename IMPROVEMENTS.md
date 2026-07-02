@@ -6,6 +6,15 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **All AC measurements modulate from the lock-in oscillator (no DAC modulation).**
+  The X/Y/XY position sweeps used to also program a DAC sine modulation
+  (`demod`/`freq`/`mod_amp`), on top of the lock-in oscillator. That was redundant
+  — the sample current is driven by the lock-in oscillator (`volt` at
+  `lockin_freq`), the same way the Time measurement and the AC B-sweep already
+  work — so the DAC modulation was removed and those parameters dropped. The
+  `volt` control (which maps to the instrument's `OA.` oscillator-amplitude
+  command) is relabelled **"Lock-in oscillator amplitude"** everywhere so it's
+  clear it sets the current-drive amplitude.
 - **B-Sweep LockIn uses AC lock-in detection (not a chopper).** The lock-in
   hysteresis loop now drives the modulation from the lock-in's own oscillator
   (`volt` at `lockin_freq`, driving the sample current) and reads the

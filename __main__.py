@@ -117,7 +117,7 @@ class MainWindow(UIWindow):
         # Server base: data + lab notebook are copied under here after each run.
         # General folder    -> <base>/Data/<date>/<mode>/
         # Per-operator folder -> <base>/<operator>/Data/<date>/<mode>/
-        self.server_line.setText(r"Z:\projects\MOKE_mini")
+        self.server_line.setText("Z:/projects/MOKE_mini")
 
     # ── Post-measurement archiving ────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ class MainWindow(UIWindow):
             except Exception as exc:
                 log.warning(f"Could not copy data to server '{dest_dir}': {exc}")
         try:
-            # Directly in the server base (Z:\projects\MOKE_mini\lab_notebook_MINImoke.csv).
+            # Directly in the server base (Z:/projects/MOKE_mini/lab_notebook_MINImoke.csv).
             append_lab_notebook(os.path.join(server_base, LAB_NOTEBOOK_FILENAME), row)
         except Exception as exc:
             log.warning(f"Could not update server lab notebook: {exc}")

@@ -277,6 +277,20 @@ class Ametek7270(Instrument):
         """
         return super().ask(command, query_delay).strip()
 
+    def reset_communication(self):
+        """Flush the VISA/USB buffers so a wedged link recovers without a power
+        cycle.
+
+        The USB link can stop accepting writes if a previous run left the
+        instrument in a bad state (e.g. after an input overload) or with an
+        unread response still queued.  A VISA ``clear`` resets the interface
+        without touching any measurement settings.  Best-effort: never raise.
+        """
+        try:
+            self.adapter.connection.clear()
+        except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
+            log.warning(f"Lock-in interface clear failed: {exc}")
+
     def set_reference_mode(self, mode: int = 0):
         """Set the instrument in Single, Dual or harmonic mode.
 
@@ -286,7 +300,15 @@ class Ametek7270(Instrument):
         """
         if mode not in [0, 1, 2]:
             raise ValueError('Invalid reference mode')
-        self.ask(f'REFMODE {mode}')
+        # This is the first command each measurement sends.  If the link is
+        # wedged from a previous run, the write times out; clear the interface
+        # and retry once so a single glitch doesn't abort the whole run.
+        try:
+            self.ask(f'REFMODE {mode}')
+        except Exception as exc:   # noqa: BLE001 - broad: any VISA/IO failure
+            log.warning(f"REFMODE {mode} failed ({exc}); resetting link and retrying.")
+            self.reset_communication()
+            self.ask(f'REFMODE {mode}')
 
     def set_voltage_mode(self):
         """ Sets instrument to voltage control mode """

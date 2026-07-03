@@ -6,6 +6,17 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Single reference mode (no more demod2 overload/spikes).** The AC lock-in
+  measurements (X/Y/XY, AC B-sweep, Time) were using the 7270's dual-harmonic
+  mode (`REFMODE 1`) and reading `meas.x1/…`. That runs a *second* demodulator at
+  2f which we never use — it was overloading (~300 %) and injecting spikes, and a
+  wedged instrument from that overload was making the next run's first command
+  (`set_reference_mode`) time out over USB. Switched to single reference mode
+  (`REFMODE 0`) reading `meas.x/y/mag/theta` (the fundamental at the modulation
+  frequency, same physical quantity), so demod2 is gone. Also made
+  `set_reference_mode` clear the VISA link and retry once on a comms error, so a
+  single wedged-link glitch recovers without a power cycle instead of aborting the
+  run.
 - **All AC measurements modulate from the lock-in oscillator (no DAC modulation).**
   The X/Y/XY position sweeps used to also program a DAC sine modulation
   (`demod`/`freq`/`mod_amp`), on top of the lock-in oscillator. That was redundant

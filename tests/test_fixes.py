@@ -322,10 +322,10 @@ def test_b_sweep_lockin_uses_lockin_oscillator_not_chopper_or_dac():
     fakes["dsp"].set_reference_mode = lambda mode=0: modes.append(mode)
     fakes["dsp"].setup_lockin_condition = lambda **k: lockin_cfg.update(k)
     fakes["dac"].setup_aquisition = lambda **k: dac_cfg.update(k)
-    # Distinct values so first-harmonic reads (x1) are told apart from single-ref (x).
-    fakes["meas"].x1, fakes["meas"].y1 = 1.0, 2.0
-    fakes["meas"].mag1, fakes["meas"].theta1 = 3.0, 4.0
-    fakes["meas"].x = -99.0     # single-reference read must NOT be used
+    # Distinct values so single-reference reads (x) are told apart from dual (x1).
+    fakes["meas"].x, fakes["meas"].y = 1.0, 2.0
+    fakes["meas"].mag, fakes["meas"].theta = 3.0, 4.0
+    fakes["meas"].x1 = -99.0     # dual-harmonic read must NOT be used
 
     p = bsl.B_Sweep_Lockin()
     p.set_sample_name("t")
@@ -340,7 +340,8 @@ def test_b_sweep_lockin_uses_lockin_oscillator_not_chopper_or_dac():
     p.should_stop = lambda: False
 
     p.startup()
-    assert 1 in modes and 0 not in modes, f"must use dual-harmonic reference mode: {modes}"
+    assert 0 in modes and 1 not in modes, \
+        f"must use single reference mode (0), not dual-harmonic (1): {modes}"
     # The lock-in oscillator sets the frequency and drives the current (volt).
     assert lockin_cfg.get("lockin_frequency") == 3333.0
     assert lockin_cfg.get("lockin_voltage") == 0.7
@@ -351,7 +352,7 @@ def test_b_sweep_lockin_uses_lockin_oscillator_not_chopper_or_dac():
     p.execute()
     live = [r for r in records if not np.isnan(r["Voltage X 1f (V)"])]
     assert live, "no live lock-in points emitted"
-    assert live[0]["Voltage X 1f (V)"] == 1.0      # from meas.x1, not meas.x
+    assert live[0]["Voltage X 1f (V)"] == 1.0      # from meas.x, not meas.x1
     assert live[0]["Voltage R 1f (V)"] == 3.0
     # The averaged loop carries the signed X average (the physical hysteresis loop).
     avg = [r for r in records if not np.isnan(r["Voltage X Average (V)"])]
@@ -748,10 +749,11 @@ def test_single_lockin_instance():
 
 
 def test_x_sweep_sets_lockin_reference_mode_in_startup():
-    """X/Y/XY read first-harmonic outputs, so startup must select dual-harmonic
-    reference mode (1); otherwise those reads return '' and raise mid-sweep.  The
-    modulation comes from the lock-in oscillator (volt @ lockin_freq), not the
-    DAC, so the DAC must be configured with NO modulation."""
+    """X/Y/XY read the single-reference demod outputs, so startup must select
+    single reference mode (0) — NOT the dual-harmonic mode (1), whose unused 2f
+    demodulator overloads and spikes.  The modulation comes from the lock-in
+    oscillator (volt @ lockin_freq), not the DAC, so the DAC must be configured
+    with NO modulation."""
     import src.procedures.position_sweep as ps
     import src.procedures.x_sweep_proc as xsp
     fakes = _patch_proc_module(ps)     # startup/execute/shutdown live in position_sweep
@@ -772,7 +774,8 @@ def test_x_sweep_sets_lockin_reference_mode_in_startup():
     p.volt, p.lockin_freq = 0.8, 2500.0
     p.startup()
 
-    assert 1 in calls, f"dual-harmonic reference mode not set in startup: {calls}"
+    assert 0 in calls and 1 not in calls, \
+        f"must use single reference mode (0), not dual-harmonic (1): {calls}"
     # Oscillator drives the current: amplitude = volt, frequency = lockin_freq.
     assert lockin_cfg.get("lockin_voltage") == 0.8
     assert lockin_cfg.get("lockin_frequency") == 2500.0
@@ -905,6 +908,35 @@ def test_2d_map_builds_image_sized_to_the_grid():
     img = iw.new_curve(FakeResults())
     assert isinstance(img, ResultsImage)
     assert (img.xsize, img.ysize) == (nx, ny), (img.xsize, img.ysize, nx, ny)
+
+
+def test_lockin_set_reference_mode_recovers_from_wedged_link():
+    """A timed-out REFMODE write must trigger a VISA clear + one retry, so a
+    single wedged-link glitch (e.g. after an overload) doesn't abort the run."""
+    from src.classes.ametek7270_class import Ametek7270
+
+    dsp = Ametek7270.__new__(Ametek7270)     # bypass hardware __init__
+    events = []
+
+    class FakeConn:
+        def clear(self): events.append("clear")
+
+    class FakeAdapter:
+        connection = FakeConn()
+
+    dsp.adapter = FakeAdapter()
+    calls = {"n": 0}
+
+    def fake_ask(cmd, query_delay=0):
+        calls["n"] += 1
+        events.append(cmd)
+        if calls["n"] == 1:
+            raise RuntimeError("VI_ERROR_TMO")   # first write is wedged
+        return ""
+    dsp.ask = fake_ask
+
+    dsp.set_reference_mode(0)                 # must clear + retry, not raise
+    assert events == ["REFMODE 0", "clear", "REFMODE 0"], events
 
 
 # ---------------------------------------------------------------------------

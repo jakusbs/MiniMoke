@@ -52,10 +52,10 @@ def read_signals(field_A) -> dict:
     return {
         'Magnetic Field (A)':   field_A,
         'Magnetic Field (T)':   B_measurement / 1000.0,
-        'Voltage X 1f (V)':     meas.x1,
-        'Voltage Y 1f (V)':     meas.y1,
-        'Voltage R 1f (V)':     meas.mag1,
-        'Voltage theta 1f (V)': meas.theta1,
+        'Voltage X 1f (V)':     meas.x,
+        'Voltage Y 1f (V)':     meas.y,
+        'Voltage R 1f (V)':     meas.mag,
+        'Voltage theta 1f (V)': meas.theta,
         'Voltage DC (V)':       balanced_diodes_DC,
         'Voltage DC STD (V)':   np.std(balanced_diodes_data),
         'Intensity (V)':        intensity_DC,
@@ -168,12 +168,13 @@ class PositionSweep(Procedure):
                              acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
                              modulation_amp=0.0)
 
-        # This scan reads the lock-in's first-harmonic outputs
-        # (meas.x1/y1/mag1/theta1), which are only valid in dual-harmonic
-        # reference mode.  Set it explicitly so the run never depends on whatever
-        # mode the instrument was last left in (otherwise those reads return an
-        # empty string and raise mid-sweep).
-        dsp.set_reference_mode(1)
+        # Single reference mode (REFMODE 0): one demodulator at the modulation
+        # frequency, read as meas.x/y/mag/theta.  We deliberately do NOT use the
+        # dual-harmonic mode (REFMODE 1): its second demodulator (the 2f channel)
+        # is unused here and would overload on the MOKE signal, injecting spikes.
+        # Set it explicitly so the run never depends on whatever mode the
+        # instrument was last left in.
+        dsp.set_reference_mode(0)
         dsp.setup_lockin_condition(lockin_voltage=self.volt, lockin_sensitivity=self.sensi,
                                    lockin_frequency=self.lockin_freq,
                                    lockin_time_constant=self.time_const, lockin_phase=self.phase)

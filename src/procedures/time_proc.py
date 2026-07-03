@@ -96,8 +96,10 @@ class TimeMeasurement(Procedure):
         dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,
                              acquisition_time=self.acq_time, sampling_rate=50000,
                              modulation_amp=0.)
-        # Read the lock-in's first-harmonic outputs (dual-harmonic reference mode).
-        dsp.set_reference_mode(1)
+        # Single reference mode (REFMODE 0): one demodulator at the modulation
+        # frequency (meas.x/y/mag/theta).  Avoids the dual-harmonic 2f channel,
+        # which is unused here and would overload on the MOKE signal.
+        dsp.set_reference_mode(0)
         dsp.setup_lockin_condition(lockin_voltage=self.volt, lockin_sensitivity=self.sensi,
                                    lockin_frequency=self.lockin_freq,
                                    lockin_time_constant=self.time_const, lockin_phase=self.phase)

@@ -30,8 +30,8 @@ class B_Sweep_Lockin(Procedure):
     The lock-in's own internal oscillator provides the modulation: it outputs
     ``volt`` at ``lockin_freq`` (driving the sample current through the external
     current source) and demodulates its input at that same reference, so we read
-    the already-demodulated first-harmonic outputs (``meas.x1/y1/mag1/theta1``),
-    the same reads the X/Y/XY sweeps use.  No DAC modulation and no external
+    the already-demodulated outputs (``meas.x/y/mag/theta``) in single reference
+    mode, the same reads the X/Y/XY sweeps use.  No DAC modulation and no external
     optical chopper are involved.  Forward and backward branches are accumulated
     separately; the averaged loop is emitted once at the end.
     """
@@ -217,12 +217,13 @@ class B_Sweep_Lockin(Procedure):
         # ── Configure lock-in amplifier ───────────────────────────────────────
         # The lock-in oscillator itself provides the modulation: it outputs
         # `volt` at `lockin_freq` (driving the sample current) and demodulates
-        # its input at that same reference.  Dual-harmonic reference mode
-        # (REFMODE 1) so the first-harmonic reads X1./Y1./MAG1./PHA1.
-        # (meas.x1/y1/mag1/theta1) are valid — the same reads the position sweeps
-        # use.  Set explicitly so the run never depends on whatever mode the
-        # instrument was last left in.
-        dsp.set_reference_mode(1)
+        # its input at that same reference.  Single reference mode (REFMODE 0):
+        # one demodulator at the modulation frequency, read as meas.x/y/mag/theta.
+        # We deliberately avoid the dual-harmonic mode (REFMODE 1): its second
+        # demodulator (2f) is unused here and would overload on the MOKE signal,
+        # injecting spikes.  Set explicitly so the run never depends on whatever
+        # mode the instrument was last left in.
+        dsp.set_reference_mode(0)
         dsp.setup_lockin_condition(
             lockin_voltage       = self.volt,
             lockin_sensitivity   = self.sensi,
@@ -231,7 +232,7 @@ class B_Sweep_Lockin(Procedure):
             lockin_phase         = self.phase,
         )
         log.info(
-            f"Lock-in configured (dual-harmonic): f={self.lockin_freq} Hz, "
+            f"Lock-in configured (single reference): f={self.lockin_freq} Hz, "
             f"sensi={self.sensi*1e6:.1f} µV, τ={self.time_const*1e3:.1f} ms, "
             f"phase={self.phase}°"
         )
@@ -308,13 +309,12 @@ class B_Sweep_Lockin(Procedure):
         # so the lock-in reads happen in parallel with the DAC sampling window.
         dac.start_tasks()
 
-        # Read the lock-in's first-harmonic outputs (X1./Y1./MAG1./PHA1.), which
-        # are valid in the dual-harmonic reference mode set in startup() — the
-        # same reads the X/Y/XY position sweeps use.
-        lockin_x     = meas.x1
-        lockin_y     = meas.y1
-        lockin_r     = meas.mag1
-        lockin_theta = meas.theta1
+        # Read the lock-in's demodulated outputs (X./Y./MAG./PHA.) — single
+        # reference mode, set in startup() — the same reads the X/Y/XY sweeps use.
+        lockin_x     = meas.x
+        lockin_y     = meas.y
+        lockin_r     = meas.mag
+        lockin_theta = meas.theta
 
         # Wait for DAC acquisition to finish and collect ADC data
         balanced_data, intensity_data = dac.read_data()

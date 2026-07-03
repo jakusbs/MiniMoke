@@ -181,9 +181,24 @@ class DAC:
         except Exception:
             pass
 
-        # Patch only the coils channel row (row 2) — avoids rebuilding the array
+        # Refresh the per-point values in the pre-allocated buffer:
+        #   - row 2 (coils) changes between every field step,
+        #   - rows 0/1 carry the constant DC bias (dc_output); they must be
+        #     refreshed too because dc_output (e.g. cst_out1/cst_out2) is set by
+        #     the procedure AFTER setup_aquisition built the buffer.  The
+        #     channel currently used for modulation keeps its pre-built sine
+        #     waveform and is left untouched.
+        # This preserves the fast path (no Task creation, no full rebuild) while
+        # ensuring the constant outputs actually take effect.
         if self._output_values is not None:
             self._output_values[2, :] = self.coils_output
+            if self.mod_chan == "AC_Output1":
+                self._output_values[1, :] = self.dc_output[1]
+            elif self.mod_chan == "AC_Output2":
+                self._output_values[0, :] = self.dc_output[0]
+            else:
+                self._output_values[0, :] = self.dc_output[0]
+                self._output_values[1, :] = self.dc_output[1]
         else:
             self._build_output_buffer()
 

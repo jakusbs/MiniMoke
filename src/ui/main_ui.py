@@ -26,10 +26,12 @@ from pymeasure.display.widgets import (
     BrowserWidget,
     InputsWidget,
     LogWidget,
+    ImageWidget,
 )
 from qtpy.QtWidgets import QLineEdit as DirectoryLineEdit
 from pymeasure.experiment import Results
 
+from .separated_plot import SeparatedPlotWidget
 from src.classes import log, StatusBarHandler, stage, dac, hall_sensor, set_active_stage
 
 
@@ -108,8 +110,25 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.sample_name_line = QLineEdit(self)
         self.sample_name_line.setText("MySample")
 
-        # ── Setup toggle (Longitudinal / Polar) ───────────────────
+        # Operator — recorded in the lab notebook and used for the per-user
+        # server folder (<server>/<operator>/Data/...).
+        self.operator_label = QtWidgets.QLabel(self)
+        self.operator_label.setText("Operator:")
+        self.operator_line = QLineEdit(self)
+
+        # Server directory — after each measurement the data file (and a lab
+        # notebook row) are copied here in addition to the local save.
+        self.server_label = QtWidgets.QLabel(self)
+        self.server_label.setText("Server directory:")
+        self.server_line = QLineEdit(self)
+
+        # ── Setup toggle (Longitudinal / Polar) + Geometry (PMOKE / LMOKE) ──────
+        # "Setup" is the physical stage/setup; "Geometry" is the optical MOKE
+        # geometry (field vs magnetisation).  The longitudinal setup can do both
+        # PMOKE and LMOKE, so the geometry buttons only appear for it; the polar
+        # setup is always PMOKE.
         self._setup_mode = "longitudinal"   # internal state
+        self._geometry   = "LMOKE"          # PMOKE / LMOKE (longitudinal only)
 
         toggle_container = QtWidgets.QWidget(self)
         toggle_container.setObjectName("setupToggle")
@@ -129,6 +148,20 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self._btn_polar.clicked.connect(lambda: self._set_setup_mode("polar"))
         toggle_layout.addWidget(self._btn_longitudinal)
         toggle_layout.addWidget(self._btn_polar)
+
+        # Geometry sub-toggle (shown only for the longitudinal setup)
+        self._geometry_label = QtWidgets.QLabel("  Geometry:", toggle_container)
+        self._geometry_label.setObjectName("liveLabel")
+        toggle_layout.addWidget(self._geometry_label)
+        self._btn_pmoke = QtWidgets.QPushButton("PMOKE", toggle_container)
+        self._btn_lmoke = QtWidgets.QPushButton("LMOKE", toggle_container)
+        self._btn_pmoke.setObjectName("setupBtnInactive")
+        self._btn_lmoke.setObjectName("setupBtnActive")
+        self._btn_pmoke.clicked.connect(lambda: self._set_geometry("PMOKE"))
+        self._btn_lmoke.clicked.connect(lambda: self._set_geometry("LMOKE"))
+        toggle_layout.addWidget(self._btn_pmoke)
+        toggle_layout.addWidget(self._btn_lmoke)
+
         toggle_layout.addStretch()
         self.setup_toggle_widget = toggle_container
 
@@ -193,14 +226,40 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self._btn_polar.setObjectName(
             "setupBtnActive" if mode == "polar" else "setupBtnInactive")
         # Force QSS re-evaluation after objectName change
-        self._btn_longitudinal.style().unpolish(self._btn_longitudinal)
-        self._btn_longitudinal.style().polish(self._btn_longitudinal)
-        self._btn_polar.style().unpolish(self._btn_polar)
-        self._btn_polar.style().polish(self._btn_polar)
+        for btn in (self._btn_longitudinal, self._btn_polar):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+        # Geometry only applies to the longitudinal setup; the polar setup is
+        # always PMOKE.  Show/hide the geometry buttons, but keep the stored
+        # longitudinal geometry (self._geometry) across setup switches.
+        show_geometry = (mode != "polar")
+        for w in (self._geometry_label, self._btn_pmoke, self._btn_lmoke):
+            w.setVisible(show_geometry)
+        if show_geometry:
+            self._set_geometry(self._geometry)   # refresh button styling
+
+    def _set_geometry(self, geometry: str):
+        """Select the optical MOKE geometry (PMOKE / LMOKE) for the longitudinal
+        setup.  Recorded in the lab notebook."""
+        self._geometry = geometry
+        self._btn_pmoke.setObjectName(
+            "setupBtnActive" if geometry == "PMOKE" else "setupBtnInactive")
+        self._btn_lmoke.setObjectName(
+            "setupBtnActive" if geometry == "LMOKE" else "setupBtnInactive")
+        for btn in (self._btn_pmoke, self._btn_lmoke):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     @property
     def setup_mode(self) -> str:
         return self._setup_mode
+
+    @property
+    def geometry(self) -> str:
+        """Effective MOKE geometry recorded for a measurement: PMOKE for the
+        polar setup, otherwise the selected longitudinal geometry."""
+        return "PMOKE" if self._setup_mode == "polar" else self._geometry
 
     def showEvent(self, event):
         """Re-apply compact inputs layout after the window is first shown.
@@ -260,6 +319,9 @@ class UIWindowBase(QtWidgets.QMainWindow):
                 b.setObjectName("procTabBtnActive" if bid == btn_id else "procTabBtnInactive")
                 b.style().unpolish(b)
                 b.style().polish(b)
+            # Default the results plot's x-axis to the quantity this procedure
+            # sweeps (position for X/Y scans, time for the time trace, ...).
+            self._apply_default_x_axis(btn_id)
 
         self._proc_btn_group.idClicked.connect(_on_proc_selected)
 
@@ -308,11 +370,17 @@ class UIWindowBase(QtWidgets.QMainWindow):
 
         footer_vbox.addWidget(self.sample_name_label)
         footer_vbox.addWidget(self.sample_name_line)
+        footer_vbox.addWidget(self.operator_label)
+        footer_vbox.addWidget(self.operator_line)
         footer_vbox.addWidget(self.setup_toggle_widget)
         footer_vbox.addWidget(self.repetitions_label)
         footer_vbox.addWidget(self.repetitions_line)
-        footer_vbox.addWidget(self.directory_label)
-        footer_vbox.addWidget(self.directory_line)
+        # directory_label / directory_line only exist when directory_input=True
+        if self.directory_input:
+            footer_vbox.addWidget(self.directory_label)
+            footer_vbox.addWidget(self.directory_line)
+        footer_vbox.addWidget(self.server_label)
+        footer_vbox.addWidget(self.server_line)
 
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(self.queue_button)
@@ -398,6 +466,27 @@ class UIWindowBase(QtWidgets.QMainWindow):
         idx = self._proc_btn_group.checkedId()
         return idx if idx >= 0 else 0
 
+    def _apply_default_x_axis(self, idx):
+        """Set the results plot's x-axis to the procedure's swept quantity.
+
+        Each procedure may declare ``DEFAULT_X_AXIS`` (a column name); if it does
+        and that column exists in the plot, the x-axis switches to it when the
+        procedure tab is selected.
+        """
+        if not hasattr(self, "plot_widget"):
+            return
+        try:
+            x_col = getattr(self.procedure_class[idx], "DEFAULT_X_AXIS", None)
+        except Exception:
+            x_col = None
+        if not x_col:
+            return
+        combo = self.plot_widget.columns_x
+        pos = combo.findText(x_col)
+        if pos >= 0:
+            combo.setCurrentIndex(pos)
+            self.plot_widget.plot_frame.change_x_axis(x_col)
+
     def quit(self, evt=None):
         if self.manager.is_running():
             self.abort()
@@ -410,10 +499,12 @@ class UIWindowBase(QtWidgets.QMainWindow):
             experiment = self.manager.experiments.with_browser_item(item)
             if state == QtCore.Qt.CheckState.Unchecked:
                 for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                    wdg.remove(curve)
+                    if curve is not None:
+                        wdg.remove(curve)
             else:
                 for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                    wdg.load(curve)
+                    if curve is not None:
+                        wdg.load(curve)
 
     def browser_item_menu(self, position):
         item = self.browser.itemAt(position)
@@ -555,8 +646,12 @@ class UIWindowBase(QtWidgets.QMainWindow):
                 # Rename them in-place so the plot axes resolve correctly.
                 _COLUMN_ALIASES = {
                     "Magnetic Field (mT)": "Magnetic Field (T)",
-                    "X Position (mm)":     "X Position (m)",
-                    "Y Position (mm)":     "Y Position (m)",
+                    # Positions are now recorded in micrometres.  Older files used
+                    # millimetres, and files from the interim version used metres.
+                    "X Position (mm)":     "X Position (um)",
+                    "Y Position (mm)":     "Y Position (um)",
+                    "X Position (m)":      "X Position (um)",
+                    "Y Position (m)":      "Y Position (um)",
                 }
                 existing = set(results.data.columns)
                 rename_map = {
@@ -568,10 +663,15 @@ class UIWindowBase(QtWidgets.QMainWindow):
                     results.data.rename(columns=rename_map, inplace=True)
                     if "Magnetic Field (mT)" in rename_map:
                         results.data["Magnetic Field (T)"] /= 1000.0
+                    # Convert the renamed position values into micrometres.
                     if "X Position (mm)" in rename_map:
-                        results.data["X Position (m)"] /= 1000.0
+                        results.data["X Position (um)"] *= 1000.0
+                    elif "X Position (m)" in rename_map:
+                        results.data["X Position (um)"] *= 1e6
                     if "Y Position (mm)" in rename_map:
-                        results.data["Y Position (m)"] /= 1000.0
+                        results.data["Y Position (um)"] *= 1000.0
+                    elif "Y Position (m)" in rename_map:
+                        results.data["Y Position (um)"] *= 1e6
                     log.info(
                         f"Renamed legacy columns for '{os.path.basename(filename)}': "
                         + ", ".join(f"{o} -> {n}" for o, n in rename_map.items())
@@ -592,7 +692,8 @@ class UIWindowBase(QtWidgets.QMainWindow):
             pixelmap.fill(color)
             experiment.browser_item.setIcon(0, QtGui.QIcon(pixelmap))
             for wdg, curve in zip(self.widget_list, experiment.curve_list):
-                wdg.set_color(curve, color=color)
+                if curve is not None:
+                    wdg.set_color(curve, color=color)
 
     def open_file_externally(self, filename):
         """ Method to open the datafile using an external editor or viewer. Uses the default
@@ -622,6 +723,13 @@ class UIWindowBase(QtWidgets.QMainWindow):
         return procedure
 
     def new_curve(self, wdg, results, color=None, **kwargs):
+        # The 2D map (ImageWidget) can only render procedures that declare a grid
+        # via '<x-axis>_start/_end/_step' attributes (i.e. the XY grid scan).  For
+        # every other procedure it produces no image curve; None keeps the curve
+        # list index-aligned with widget_list, and the manager guards None curves.
+        if isinstance(wdg, ImageWidget):
+            if not hasattr(results.procedure, wdg.x_axis + "_start"):
+                return None
         if color is None:
             color = pg.intColor(self.browser.topLevelItemCount() % 8)
         return wdg.new_curve(results, color=color, **kwargs)
@@ -737,16 +845,44 @@ class UIWindow(UIWindowBase):
         self.x_axis = x_axis
         self.y_axis = y_axis
         self.log_widget = LogWidget("Experiment Log")
-        self.plot_widget = PlotWidget("Results Graph", procedure_class[0].DATA_COLUMNS, self.x_axis,
-                                      self.y_axis, linewidth=linewidth)
+        # Offer every procedure's columns in the plot's axis selectors (union,
+        # order-preserving) so e.g. 'Time (s)' from the time trace is selectable
+        # even though the plot is built from the first procedure.
+        all_columns = []
+        for cls in procedure_class:
+            for col in cls.DATA_COLUMNS:
+                if col not in all_columns:
+                    all_columns.append(col)
+        # SeparatedPlotWidget breaks the line between loops using the Loop column.
+        self.plot_widget = SeparatedPlotWidget("Results Graph", all_columns,
+                                               self.x_axis, self.y_axis, linewidth=linewidth)
         self.plot_widget.setMinimumSize(100, 200)
+
+        # 2D colour map for the grid scan (XY-Sweep).  The X/Y position axes are
+        # fixed; the colour (z) axis is user-selectable and defaults to the DC
+        # balance signal.  Only procedures that declare a grid contribute an image
+        # curve (see new_curve); the others simply leave the map empty.
+        self.image_widget = None
+        map_x, map_y, map_z = "X Position (um)", "Y Position (um)", "Voltage DC (V)"
+        if map_x in all_columns and map_y in all_columns:
+            self.image_widget = ImageWidget(
+                "2D Map", all_columns, map_x, map_y,
+                z_axis=map_z if map_z in all_columns else None)
+            self.image_widget.setMinimumSize(100, 200)
 
         if "widget_list" not in kwargs:
             kwargs["widget_list"] = ()
-        kwargs["widget_list"] = kwargs["widget_list"] + (self.plot_widget, self.log_widget)
+        extra = (self.plot_widget,)
+        if self.image_widget is not None:
+            extra += (self.image_widget,)
+        extra += (self.log_widget,)
+        kwargs["widget_list"] = kwargs["widget_list"] + extra
 
         super().__init__(procedure_class, **kwargs)
         self.directory = "C:/Users/intermag/Desktop/Data"
+
+        # Match the plot x-axis to the initially selected procedure.
+        self._apply_default_x_axis(self.get_selected_tab_index())
 
         # Setup measured_quantities once we know x_axis and y_axis
         self.browser_widget.browser.measured_quantities = [self.x_axis, self.y_axis]

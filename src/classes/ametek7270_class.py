@@ -49,6 +49,12 @@ class Ametek7270(Instrument):
     if called incorrectly
     """
 
+    # Mirrors the ``enabled`` flag used by the other device classes (DAC,
+    # HallSensor, stages) so callers can uniformly test whether the hardware
+    # is available.  A successfully constructed instrument is enabled; the
+    # OfflineLockin fallback (below) reports False.
+    enabled = True
+
     SENSITIVITIES = [
         0.0, 2.0e-9, 5.0e-9, 10.0e-9, 20.0e-9, 50.0e-9, 100.0e-9,
         200.0e-9, 500.0e-9, 1.0e-6, 2.0e-6, 5.0e-6, 10.0e-6,
@@ -271,6 +277,20 @@ class Ametek7270(Instrument):
         """
         return super().ask(command, query_delay).strip()
 
+    def reset_communication(self):
+        """Flush the VISA/USB buffers so a wedged link recovers without a power
+        cycle.
+
+        The USB link can stop accepting writes if a previous run left the
+        instrument in a bad state (e.g. after an input overload) or with an
+        unread response still queued.  A VISA ``clear`` resets the interface
+        without touching any measurement settings.  Best-effort: never raise.
+        """
+        try:
+            self.adapter.connection.clear()
+        except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
+            log.warning(f"Lock-in interface clear failed: {exc}")
+
     def set_reference_mode(self, mode: int = 0):
         """Set the instrument in Single, Dual or harmonic mode.
 
@@ -280,7 +300,15 @@ class Ametek7270(Instrument):
         """
         if mode not in [0, 1, 2]:
             raise ValueError('Invalid reference mode')
-        self.ask(f'REFMODE {mode}')
+        # This is the first command each measurement sends.  If the link is
+        # wedged from a previous run, the write times out; clear the interface
+        # and retry once so a single glitch doesn't abort the whole run.
+        try:
+            self.ask(f'REFMODE {mode}')
+        except Exception as exc:   # noqa: BLE001 - broad: any VISA/IO failure
+            log.warning(f"REFMODE {mode} failed ({exc}); resetting link and retrying.")
+            self.reset_communication()
+            self.ask(f'REFMODE {mode}')
 
     def set_voltage_mode(self):
         """ Sets instrument to voltage control mode """
@@ -334,3 +362,62 @@ class Ametek7270(Instrument):
         log.info("Shutting down %s" % self.name)
         self.voltage = 0.
         super().shutdown()
+
+
+class OfflineLockin:
+    """Drop-in stand-in used when no Ametek 7270 lock-in (or VISA backend) is
+    available.
+
+    The real :class:`Ametek7270` is constructed at import time in
+    ``src/classes/__init__.py``.  If the instrument is not connected, that
+    construction raises and would otherwise crash the whole application before
+    the UI ever appears — unlike every other device (DAC, Hall sensor, stages),
+    which degrade gracefully.  This stub mirrors the subset of the Ametek API
+    the procedures and UI actually use so the program can still start and run
+    (returning zeros) when the lock-in is missing.
+    """
+
+    enabled = False
+
+    # Measurement reads — always 0.0 when offline.
+    x = y = x1 = y1 = x2 = y2 = 0.0
+    mag = mag1 = theta = theta1 = xy = 0.0
+    adc1 = adc2 = adc3 = adc4 = 0.0
+    auto_gain = False
+
+    def __init__(self):
+        self.name = "Ametek DSP 7270 (offline)"
+        # Settable controls — stored but otherwise ignored.
+        self.voltage = self.sensitivity = self.frequency = 0.0
+        self.time_constant = self.phase = 0.0
+        self.harmonic = 1
+        self.sensitivity_values = self.SENSITIVITIES if hasattr(self, "SENSITIVITIES") else []
+
+    @property
+    def id(self):
+        return "Ametek DSP 7270 (offline)/n.a."
+
+    # Command/configuration helpers — all no-ops returning empty/neutral values.
+    def ask(self, command, query_delay=0):
+        return ""
+
+    def set_reference_mode(self, mode: int = 0):
+        pass
+
+    def set_voltage_mode(self):
+        pass
+
+    def set_current_mode(self, low_noise=False):
+        pass
+
+    def set_differential_mode(self, lineFiltering=True):
+        pass
+
+    def set_channel_A_mode(self):
+        pass
+
+    def setup_lockin_condition(self, *args, **kwargs):
+        pass
+
+    def shutdown(self):
+        pass

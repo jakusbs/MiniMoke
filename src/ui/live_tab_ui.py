@@ -8,6 +8,7 @@ from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from src.classes import dac
 from src.classes import log
 from src.classes import hall_sensor
+from src.classes import live_readout
 
 class HallSensorThread(QThread):
     sensor_data_signal = pyqtSignal(float)
@@ -17,10 +18,19 @@ class HallSensorThread(QThread):
 
     def run(self):
         while True:
-            if not hall_sensor.reserved:
-                sensor_data = hall_sensor.read_mT()
-                if sensor_data: self.sensor_data_signal.emit(sensor_data)
-            else:
+            try:
+                if not hall_sensor.reserved:
+                    sensor_data = hall_sensor.read_mT()
+                    if sensor_data: self.sensor_data_signal.emit(sensor_data)
+                else:
+                    # A scan owns the sensor; show its latest field instead of
+                    # freezing the card.
+                    self.sensor_data_signal.emit(live_readout.field_mT)
+                    sleep(0.2)
+            except Exception as e:
+                # A transient read error must never terminate the thread,
+                # otherwise the live readout stays frozen until an app restart.
+                log.error(f"Hall sensor live thread error: {e}")
                 sleep(1)
 
     def zero_sensor_value(self):
@@ -37,18 +47,31 @@ class VoltageThread(QThread):
 
     def run(self):
         while True:
-            if not dac.reserved:
-                if not dac.status_setup:
-                    dac.setup_aquisition(acquisition_time=0.5, modulation_amp=[0.,0.])
-                dac.start_tasks()
-                balanced_diodes_data, intensity_diode_data = dac.read_data()
+            try:
+                if not dac.reserved:
+                    if not dac.status_setup:
+                        dac.setup_aquisition(acquisition_time=0.5, modulation_amp=0.)
+                    dac.start_tasks()
+                    balanced_diodes_data, intensity_diode_data = dac.read_data()
 
-                output = {
-                    "bd": np.mean(balanced_diodes_data),
-                    "id": np.mean(intensity_diode_data)
-                }
-                self.balanced_diodes_signal.emit(output)
-            else:
+                    output = {
+                        "bd": np.mean(balanced_diodes_data),
+                        "id": np.mean(intensity_diode_data)
+                    }
+                    self.balanced_diodes_signal.emit(output)
+                else:
+                    # A scan owns the DAC; show its latest values instead of
+                    # freezing the cards.
+                    self.balanced_diodes_signal.emit({
+                        "bd": live_readout.balanced_v,
+                        "id": live_readout.intensity_v,
+                    })
+                    sleep(0.2)
+            except Exception as e:
+                # A transient DAQ error (e.g. during the hand-off when a scan
+                # releases the DAC) must not terminate the thread; otherwise the
+                # live measurements never restart after a scan finishes.
+                log.error(f"Voltage live thread error: {e}")
                 sleep(1)
 
 class LiveTab(TabWidget, QWidget):

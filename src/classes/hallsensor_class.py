@@ -13,15 +13,22 @@ DLL_working = False
 
 try:
     import clr
-    # Use a raw string for the path to avoid escape character issues
-    dll_path = r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll'
-    
-    if os.path.exists(dll_path):
+    # Use the known-good install path on the measurement PC first (this is the
+    # copy that actually loads and connects), then fall back to a DLL shipped
+    # next to the repo's libs/ folder only if that absolute path is missing.
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    _dll_candidates = [
+        r'C:/Users/intermag/Documents/minimoke/libs/MagnetPhysik.Usb.dll',
+        os.path.join(_repo_root, "libs", "MagnetPhysik.Usb.dll"),
+    ]
+    dll_path = next((p for p in _dll_candidates if os.path.exists(p)), None)
+
+    if dll_path is not None:
         clr.AddReference(dll_path)
         import MagnetPhysik as MP
         DLL_working = True
     else:
-        print(f"DLL not found at: {dll_path}")
+        print(f"MagnetPhysik DLL not found. Tried: {_dll_candidates}")
 except Exception as e:
     print(f"DLL Load Error: {e}")
     print("Ensure you are using 64-bit Python.")
@@ -67,11 +74,14 @@ class HallSensor:
         Read the magnetic field value measured by the sensor in millitesla (mT) and return it.
 
         Returns:
-            float or None: The measured magnetic field value in mT, or None if an error occurred.
+            float or None: The measured magnetic field value in mT.  Returns
+            0.0 when the sensor is disabled (no hardware) so that callers which
+            divide/scale the reading degrade gracefully like the DAC does, and
+            None only if an actual read error occurred.
         """
         sleep(self.aquisition_time)
 
-        if not self.enabled: return
+        if not self.enabled: return 0.0
 
         try:
             return self.hall_sensor.get_Tesla() * 1000.

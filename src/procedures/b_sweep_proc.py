@@ -41,6 +41,7 @@ from pymeasure.experiment import (
 from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config, dac_config
+from src.classes import live_readout
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ class B_Sweep(Procedure):
     never mixes measurements taken in opposite field directions.
     """
     name = "B-Sweep"
+    DEFAULT_X_AXIS = "Magnetic Field (T)"   # plot x-axis when this tab is open
 
     # ── Metadata ──────────────────────────────────────────────────────────────
     exp_type_md   = Metadata("Experiment type")
@@ -96,14 +98,14 @@ class B_Sweep(Procedure):
     )
 
     # Position parameters (used for output columns; not listed in UI inputs)
-    x = FloatParameter("Position x", units="mm", default=section.get("x", 0.0))
-    y = FloatParameter("Position y", units="mm", default=section.get("y", 0.0))
+    x = FloatParameter("Position x", units="um", default=section.get("x", 0.0))
+    y = FloatParameter("Position y", units="um", default=section.get("y", 0.0))
 
     # ── Output columns ────────────────────────────────────────────────────────
     DATA_COLUMNS = [
         "Iteration",
-        "X Position (m)",
-        "Y Position (m)",
+        "X Position (um)",
+        "Y Position (um)",
         "Magnetic Field (A)",
         "Magnetic Field (T)",
         'Voltage X 1f (V)',
@@ -114,11 +116,39 @@ class B_Sweep(Procedure):
         "Voltage DC Average (V)",
         'Intensity (V)',
         'Intensity STD (V)',   # emitted once at end: clean averaged loop
+        'Loop',                # loop index — used by the plot to break the line
     ]
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def set_sample_name(self, sample_name: str):
         self.sample_name = sample_name
+
+    def queue_validation_error(self):
+        """Return a message if the requested sweep frequency is too high for the
+        Hall probe at this step size, else None.
+
+        Each field point needs at least HALL_MIN_ACQ_S for a valid Hall reading,
+        so with n_total points per sweep the fastest valid sweep is
+        ``f_max = 1 / (n_total * HALL_MIN_ACQ_S)``.  The UI calls this before
+        queueing and refuses to start a sweep that would outrun the probe.
+        """
+        try:
+            n_pts   = int(np.abs(self.b_max - self.b_min) // self.b_step + 1)
+            n_total = n_pts + max(n_pts - 1, 0)      # forward + backward branches
+            if n_total < 1:
+                return None
+            f_max = 1.0 / (n_total * HALL_MIN_ACQ_S)
+            if self.sweep_freq > f_max:
+                return (
+                    f"Sweep frequency {self.sweep_freq:g} Hz is too high for the Hall "
+                    f"probe: {n_total} points/sweep need ≥ {HALL_MIN_ACQ_S * 1e3:g} ms "
+                    f"each, so the maximum at this step size is {f_max:.3g} Hz.\n\n"
+                    f"Lower the sweep frequency to ≤ {f_max:.3g} Hz, or increase the "
+                    f"field step."
+                )
+        except Exception:
+            return None
+        return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     def startup(self):
@@ -185,9 +215,9 @@ class B_Sweep(Procedure):
             dac.set_outputs_and_reset([0.0, 0.0, self.b_min])
             time.sleep(1)
 
-        log.info(f"Moving stage to ({self.x} mm, {self.y} mm)")
-        stage.move_x_to(self.x)
-        stage.move_y_to(self.y)
+        log.info(f"Moving stage to ({self.x} um, {self.y} um)")
+        stage.move_x_to(self.x / 1000.0)   # µm (param) -> mm (stage)
+        stage.move_y_to(self.y / 1000.0)
         stage.wait_stable()
 
         dac.setup_aquisition(
@@ -236,6 +266,9 @@ class B_Sweep(Procedure):
             # proxy for the live plot.  Averaged result will use a real read.
             B_mT = float("nan")
 
+        # Keep the Live tab cards updating from this running scan.
+        live_readout.push(voltage_dc, intensity, B_mT)
+
         # Burn any remaining budget so the next point starts on time
         remaining = deadline - time.perf_counter()
         if remaining > 0:
@@ -261,8 +294,8 @@ class B_Sweep(Procedure):
         n_bwd    = self._n_bwd
         T_point  = self._T_point
 
-        x_pos = stage.get_x_pos()
-        y_pos = stage.get_y_pos()
+        x_pos = stage.get_x_pos() * 1000.0   # mm (stage) -> µm (data column)
+        y_pos = stage.get_y_pos() * 1000.0
 
         # Conversion factor: DAC Ampere → mT estimate for live display when
         # hall sensor is skipped.  Adjust the constant for your coil geometry.
@@ -296,14 +329,15 @@ class B_Sweep(Procedure):
 
                 self.emit("results", {
                     "Iteration":              i,
-                    "X Position (m)":         x_pos / 1000.0,
-                    "Y Position (m)":         y_pos / 1000.0,
+                    "X Position (um)":        x_pos,
+                    "Y Position (um)":        y_pos,
                     "Magnetic Field (A)":     b_set,
                     "Magnetic Field (T)":     live_T,
                     "Voltage DC (V)":         voltage_dc,
                     "Voltage DC Average (V)": float("nan"),
                     "Intensity (V)":          intensity,
                     "Intensity STD (V)":      float("nan"),
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -325,14 +359,15 @@ class B_Sweep(Procedure):
 
                 self.emit("results", {
                     "Iteration":              n_fwd + j,
-                    "X Position (m)":         x_pos / 1000.0,
-                    "Y Position (m)":         y_pos / 1000.0,
+                    "X Position (um)":        x_pos,
+                    "Y Position (um)":        y_pos,
                     "Magnetic Field (A)":     b_set,
                     "Magnetic Field (T)":     live_T,
                     "Voltage DC (V)":         voltage_dc,
                     "Voltage DC Average (V)": float("nan"),
                     "Intensity (V)":          intensity,
                     "Intensity STD (V)":      float("nan"),
+                    "Loop":                   sweep_num,
                 })
 
                 if self.should_stop():
@@ -355,53 +390,73 @@ class B_Sweep(Procedure):
             if self.should_stop():
                 break
 
+        # If the run was aborted, skip the (potentially long) post-processing and
+        # averaged emit so the abort returns promptly instead of grinding through
+        # every field point first.  This also avoids dividing by zero when the
+        # abort happens before a single sweep completes.
+        if self.should_stop():
+            log.info("Aborted — skipping final averaged hysteresis loop.")
+            meas.shutdown()
+            return
+
         # ── Final emit: one clean averaged hysteresis loop ────────────────────
         n = self._sweeps_completed
         log.info(f"Emitting final averaged hysteresis loop ({n} sweeps)...")
 
-        if not self._hall_live:
+        if self._hall_live:
+            # _fwd_b_sum / _bwd_b_sum accumulated one reading per sweep, so the
+            # per-point mean is the sum divided by the number of sweeps.
+            fwd_b_avg = self._fwd_b_sum / n
+            bwd_b_avg = self._bwd_b_sum / n
+        else:
             # Fast mode: do a single slow hall read at each field set-point
             # now that we're no longer racing the sweep clock.  This gives
-            # accurate mT values for the averaged (saved) result.
+            # accurate mT values for the averaged (saved) result.  It is a
+            # single measurement, so it must NOT be divided by num_sweeps.
             log.info("Fast mode: performing slow hall reads for averaged result...")
             hall_sensor.set_aquisition_time(HALL_MIN_ACQ_S)
+
+            fwd_b_avg = np.zeros(n_fwd)
+            bwd_b_avg = np.zeros(n_bwd)
 
             for i, b_set in enumerate(self.b_forward):
                 dac.coils_output = b_set
                 time.sleep(HALL_MIN_ACQ_S * 2)
-                self._fwd_b_sum[i] = hall_sensor.read_mT()
+                fwd_b_avg[i] = hall_sensor.read_mT()
 
             for j, b_set in enumerate(self.b_backward[1:]):
                 dac.coils_output = b_set
                 time.sleep(HALL_MIN_ACQ_S * 2)
-                self._bwd_b_sum[j] = hall_sensor.read_mT()
+                bwd_b_avg[j] = hall_sensor.read_mT()
 
         # Emit forward branch
         for i, b_set in enumerate(self.b_forward):
             self.emit("results", {
                 "Iteration":              i,
-                "X Position (m)":         x_pos / 1000.0,
-                "Y Position (m)":         y_pos / 1000.0,
+                "X Position (um)":        x_pos,
+                "Y Position (um)":        y_pos,
                 "Magnetic Field (A)":     b_set,
-                "Magnetic Field (T)":     self._fwd_b_sum[i] / n / 1000.0,
+                "Magnetic Field (T)":     fwd_b_avg[i] / 1000.0,
                 "Voltage DC (V)":         float("nan"),
                 "Voltage DC Average (V)": self._fwd_dc_sum[i] / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      self._fwd_intens_sum[i] / n,
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         # Emit backward branch
         for j, b_set in enumerate(self.b_backward[1:]):
             self.emit("results", {
                 "Iteration":              n_fwd + j,
-                "X Position (m)":         x_pos / 1000.0,
-                "Y Position (m)":         y_pos / 1000.0,
+                "X Position (um)":        x_pos,
+                "Y Position (um)":        y_pos,
                 "Magnetic Field (A)":     b_set,
-                "Magnetic Field (T)":     self._bwd_b_sum[j] / n / 1000.0,
+                "Magnetic Field (T)":     bwd_b_avg[j] / 1000.0,
                 "Voltage DC (V)":         float("nan"),
                 "Voltage DC Average (V)": self._bwd_dc_sum[j] / n,
                 "Intensity (V)":          float("nan"),
                 "Intensity STD (V)":      self._bwd_intens_sum[j] / n,
+                "Loop":                   self.num_sweeps,   # averaged loop = own line
             })
 
         meas.shutdown()
@@ -409,7 +464,11 @@ class B_Sweep(Procedure):
     def shutdown(self):
         """Return hardware to a safe idle state."""
         log.info("Acquisition done — turning off outputs.")
-        dac.set_outputs_and_reset([0.0, 0.0, 0.0])
-        hall_sensor.set_aquisition_time(0.5)
-        dac.reserved         = False
-        hall_sensor.reserved = False
+        try:
+            dac.set_outputs_and_reset([0.0, 0.0, 0.0])
+            hall_sensor.set_aquisition_time(0.5)
+        finally:
+            # Always release the hardware so the live tab resumes, even if a
+            # teardown call above raised.
+            dac.reserved         = False
+            hall_sensor.reserved = False

@@ -23,8 +23,11 @@ from pymeasure.display.widgets import TabWidget
 from src.classes import polar_stage as stage
 from src.classes import active_stage       # for the shared hw_lock
 
-STEPS         = [10.0,  1.0,  0.1,   0.01,  0.001]
-STEP_DECIMALS = [-1,    0,    1,     2,     3]
+# Jog step sizes (mm) and the matching decimal place of each odometer digit.
+# 0.00001 mm = 0.01 um (10 nm) is the finest jog/display, matching the
+# longitudinal tab.
+STEPS         = [10.0,  1.0,  0.1,   0.01,  0.001,  0.0001,  0.00001]
+STEP_DECIMALS = [-1,    0,    1,     2,     3,      4,       5]
 
 # UI sizing constants — tweak here to resize all motor controls at once
 _BTN_W, _BTN_H     = 24, 16   # step ▲/▼ button size (px)
@@ -57,14 +60,20 @@ class _MoveWorker(QThread):
 # ---------------------------------------------------------------------------
 
 def _extract_digit(value: float, step: float, decimal_pos: int) -> str:
+    """Return the single odometer digit at *decimal_pos* of *value* (in mm).
+
+    All digits are derived from the value rounded ONCE to the finest displayed
+    place, then sliced with integer (floor) division.  Rounding each digit
+    independently (the previous behaviour) let a higher place round up while the
+    lower place failed to carry — e.g. 0.006 mm was shown as 0.016 mm — making
+    the readout appear to jump by ~10 um every few 1 um steps even though the
+    motor moved correctly.
+    """
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "?"
-    abs_val = abs(value)
-    if decimal_pos < 0:
-        digit = int(abs_val // int(step)) % 10
-    else:
-        digit = int(round(abs_val * (10 ** decimal_pos))) % 10
-    return str(digit)
+    finest = max(STEP_DECIMALS)                        # smallest place shown (3 -> 0.001 mm)
+    scaled = int(round(abs(value) * (10 ** finest)))   # integer count of finest units
+    return str((scaled // (10 ** (finest - decimal_pos))) % 10)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +181,8 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     def __init__(self, name, parent=None):
         super().__init__(parent)
         self.name = name
-        self._worker = None   # keep reference so it isn't GC'd mid-move
+        self._worker = None        # current move; kept so it isn't GC'd mid-move
+        self._WORKER_CLS = _MoveWorker   # injectable for testing
         self._build()
 
     def _build(self):
@@ -278,16 +288,25 @@ class PolarMotorsTab(TabWidget, QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     def _dispatch(self, fn, *args):
-        """Run fn(*args) in a background thread; refresh display when done.
+        """Run fn(*args) in a background thread, refreshing the display when the
+        move finishes.
 
-        Drops the request if a move is already running, preventing command
-        queuing while a motor is in motion.
+        A new move is only started once the previous one has finished; clicks
+        that arrive while the stage is still moving are ignored (not queued).
+        A FIFO queue was tried first, but for the fast axes rapid clicks piled up
+        faster than the stage could move, so it kept jogging long after the user
+        stopped.  Dropping the extra clicks keeps the jog responsive and never
+        lets a backlog build up — the user just clicks again once it has settled.
         """
         if self._worker is not None and self._worker.isRunning():
-            return
-        self._worker = _MoveWorker(fn, *args)
-        self._worker.finished.connect(self._safe_update_positions)
+            return                       # busy -> ignore this click
+        self._worker = self._WORKER_CLS(fn, *args)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
+
+    def _on_worker_finished(self):
+        """Refresh the readout once the move completes."""
+        self._safe_update_positions()
 
     def move_x(self, d): self._dispatch(stage.move_x, d)
     def move_y(self, d): self._dispatch(stage.move_y, d)

@@ -33,7 +33,25 @@ class LongitudinalStage:
         constants = stage_config.get_section("Constants")
         self.mm2steps = float(constants.get("mm2steps", "1"))
 
+        # Backlash compensation.  The Thorlabs controller overshoots and
+        # re-approaches each target from a consistent direction, taking up the
+        # ~20 um mechanical slack.  The distance only needs to be >= the true
+        # backlash (setting it a little high costs a tiny bit of extra travel,
+        # never accuracy), so it is exposed as [Constants] backlash_mm.
+        self.backlash_mm = float(constants.get("backlash_mm", "0.02"))
+        if self.enabled:
+            self._apply_backlash()
+
         self.load_offsets()
+
+    def _apply_backlash(self) -> None:
+        """Program the controller's backlash distance on every axis."""
+        steps = int(round(self.backlash_mm * self.mm2steps))
+        for motor in (self.motor_x, self.motor_y, self.motor_z):
+            try:
+                motor.setup_gen_move(backlash_distance=steps, scale=False)
+            except Exception as err:
+                print(f"Could not set backlash distance ({self.backlash_mm} mm): {err}")
 
     def load_offsets(self) -> None:
         """
@@ -80,9 +98,9 @@ class LongitudinalStage:
         Wait for the stage motors to reach a stable position.
         """
         if self.enabled:
-            self.motor_x.wait_move
-            self.motor_y.wait_move
-            self.motor_z.wait_move
+            self.motor_x.wait_move()
+            self.motor_y.wait_move()
+            self.motor_z.wait_move()
 
     #################################################################
     # MOVE MOTORS BY A NUMBER OF STEPS
@@ -107,7 +125,10 @@ class LongitudinalStage:
             mm (float): The distance to move in millimeters.
         """
         if self.enabled and not self.motor_y.is_moving():
-            self.motor_y.move_by(-mm * self.mm2steps, scale=False)
+            # Positive mm increases the Y readout, matching move_y_to()/get_y_pos()
+            # and the X/Z axes.  (Previously this used -mm, so the jog arrows moved
+            # Y opposite to the position readout.)
+            self.motor_y.move_by(mm * self.mm2steps, scale=False)
             self.motor_y.wait_move()
 
     def move_z(self, mm) -> None:

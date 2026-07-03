@@ -9,7 +9,8 @@ from .hallsensor_class import HallSensor
 from .statusbar_class import StatusBarHandler, logging
 from .longitudinal_stage_class import LongitudinalStage
 from .polar_stage_class import PolarStage
-from .ametek7270_class import Ametek7270
+from .ametek7270_class import Ametek7270, OfflineLockin
+from .live_readout import live_readout
 
 dac         = DAC()
 hall_sensor = HallSensor()
@@ -18,8 +19,27 @@ stage = longitudinal_stage  # backward-compat alias (used by B-Sweep internally 
 polar_stage = PolarStage()
 log         = logging.getLogger(__name__)
 
-meas = Ametek7270()
-dsp  = Ametek7270()
+
+def _make_lockin():
+    """Construct an Ametek 7270 lock-in, falling back to an offline stub.
+
+    Unlike the other device classes, ``Ametek7270.__init__`` raises if the
+    instrument (or a VISA backend) is unavailable.  Catching it here keeps the
+    application launchable in exactly the same way a missing DAC / Hall sensor /
+    stage already is, instead of crashing at import time.
+    """
+    try:
+        return Ametek7270()
+    except Exception as err:
+        print(f"Lock-in (Ametek 7270) not found: {err}")
+        return OfflineLockin()
+
+
+meas = _make_lockin()
+# `meas` and `dsp` are the SAME physical Ametek 7270.  Opening two driver
+# instances (two VISA sessions) to one instrument risks intermittent conflicts,
+# so `dsp` is just an alias used by the configuration calls.
+dsp  = meas
 
 log.setLevel(logging.INFO)
 

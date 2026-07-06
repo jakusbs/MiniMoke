@@ -187,7 +187,7 @@ class MainWindow(UIWindow):
             local_nb = os.path.join(desktop, "lab notebook", LAB_NOTEBOOK_FILENAME)
             append_lab_notebook(local_nb, row)
         except Exception as exc:
-            log.warning(f"Could not update local lab notebook: {exc}")
+            log.warning(f"Could not update local lab notebook (is it open in Excel?): {exc}")
 
         # Server copies and the server lab notebook.
         server_base = self.server_line.text().strip()
@@ -208,7 +208,7 @@ class MainWindow(UIWindow):
             # Directly in the server base (Z:/projects/MOKE_mini/lab_notebook_MINImoke.csv).
             append_lab_notebook(os.path.join(server_base, LAB_NOTEBOOK_FILENAME), row)
         except Exception as exc:
-            log.warning(f"Could not update server lab notebook: {exc}")
+            log.warning(f"Could not update server lab notebook (is it open in Excel?): {exc}")
 
     def queue(self, procedure=None):
         """Queue the next experiment and persist results to the data folder.
@@ -232,14 +232,28 @@ class MainWindow(UIWindow):
         from datetime import date
         date_folder = date.today().strftime("%Y-%m-%d")
         save_dir = os.path.join(self.directory, date_folder, self._setup_mode)
-        os.makedirs(save_dir, exist_ok=True)
 
-        file = unique_filename(
-            directory=save_dir,
-            prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
-            datetimeformat="%Y-%m-%d-%Hh%M",
-        )
-        results    = Results(procedure, file)
+        # Creating the folder / data file can fail (read-only folder, drive not
+        # mounted, or the file open in another program).  Surface it clearly
+        # instead of letting an unhandled PermissionError abort the queue.
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            file = unique_filename(
+                directory=save_dir,
+                prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
+                datetimeformat="%Y-%m-%d-%Hh%M",
+            )
+            results = Results(procedure, file)
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Cannot save data",
+                f"Could not create the data file in:\n{save_dir}\n\n{exc}\n\n"
+                f"Check that the folder exists and is writable, that the drive is "
+                f"connected, and that no file there is open in another program "
+                f"(e.g. Excel).",
+            )
+            return
+
         experiment = self.new_experiment(results)
         self.manager.queue(experiment)
 

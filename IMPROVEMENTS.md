@@ -6,6 +6,14 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Lab notebook no longer shifts columns; clearer save errors.** The notebook
+  header is written only when the file is new, so when a new column (`Setup`) was
+  inserted into `LAB_NOTEBOOK_COLUMNS`, older files kept their old header and
+  every later row shifted one column right. Appends now align to the file's *own*
+  header, so a schema change can never shift an existing notebook (start a fresh
+  notebook to pick up new columns). Also: the data-file save is wrapped so a
+  permission/disk error shows a clear dialog instead of crashing the queue, and
+  the notebook/server warnings hint at the usual cause (file open in Excel).
 - **Single reference mode (no more demod2 overload/spikes).** The AC lock-in
   measurements (X/Y/XY, AC B-sweep, Time) were using the 7270's dual-harmonic
   mode (`REFMODE 1`) and reading `meas.x1/…`. That runs a *second* demodulator at

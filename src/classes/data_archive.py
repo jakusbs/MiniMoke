@@ -83,14 +83,34 @@ def append_lab_notebook(notebook_path: str, row: dict) -> None:
     """Append one row to the lab-notebook CSV, writing the header if it is new.
 
     ``row`` is keyed by (a subset of) ``LAB_NOTEBOOK_COLUMNS``; unknown keys are
-    ignored and missing ones are left blank, so the header stays stable.
+    ignored and missing ones are left blank.
+
+    Appended rows are aligned to whatever header the file *already* has, not to
+    the current ``LAB_NOTEBOOK_COLUMNS``.  This matters because append mode never
+    rewrites the header: if the column list later changes (e.g. a column is
+    inserted), writing rows in the new order against an old header would shift
+    every column.  Reusing the file's own header keeps rows lined up no matter
+    how the schema evolves.  (Start a fresh notebook to pick up new columns.)
     """
     directory = os.path.dirname(notebook_path)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    is_new = not os.path.exists(notebook_path)
+
+    # A file that exists but is empty (e.g. a stray touch) still needs a header.
+    is_new = (not os.path.exists(notebook_path)) or os.path.getsize(notebook_path) == 0
+
+    fieldnames = LAB_NOTEBOOK_COLUMNS
+    if not is_new:
+        try:
+            with open(notebook_path, newline="", encoding="utf-8") as f:
+                header = next(csv.reader(f), None)
+            if header:
+                fieldnames = header
+        except Exception:
+            pass   # unreadable header -> fall back to the current columns
+
     with open(notebook_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=LAB_NOTEBOOK_COLUMNS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         if is_new:
             writer.writeheader()
         writer.writerow(row)

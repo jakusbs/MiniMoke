@@ -402,6 +402,42 @@ def test_lab_notebook_append_and_server_copy():
         assert f.read() == "a,b\n1,2\n"
 
 
+def test_lab_notebook_append_aligns_to_existing_header_no_shift():
+    """If the column list changes later (e.g. a column is inserted), appended
+    rows must still line up with the file's OWN header — never shift.  This
+    reproduces the reported 'notebook shifted one column right' after a new
+    'Setup' column was added."""
+    import os
+    import csv
+    import tempfile
+    from src.classes.data_archive import append_lab_notebook
+
+    d = tempfile.mkdtemp()
+    nb = os.path.join(d, "lab_notebook_MINImoke.csv")
+
+    # An older notebook whose header PREDATES the inserted "Setup" column.
+    old_header = ["Date", "Operator", "Geometry", "Stage type", "File path"]
+    with open(nb, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=old_header)
+        w.writeheader()
+        w.writerow({"Date": "2026-07-01", "Operator": "jak", "Geometry": "LMOKE",
+                    "Stage type": "Thorlabs", "File path": "a.csv"})
+
+    # A row carrying the current, wider schema (note the extra "Setup" key).
+    append_lab_notebook(nb, {"Date": "2026-07-02", "Operator": "tobi", "Setup": "polar",
+                             "Geometry": "PMOKE", "Stage type": "Trinamic", "File path": "b.csv"})
+
+    with open(nb, newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0].keys()) == old_header, "header must not change on append"
+    # Values stay under their correct columns — no rightward shift.
+    assert rows[1]["Geometry"] == "PMOKE"
+    assert rows[1]["Stage type"] == "Trinamic"
+    assert rows[1]["File path"] == "b.csv"
+    # "Setup" isn't a column in this file, so it is dropped, not shifted in.
+    assert "Setup" not in rows[1]
+
+
 def test_archive_experiment_writes_local_notebook_and_server_copies():
     """MainWindow._archive_experiment must copy the data file to the general and
     per-operator server folders and append the local + server lab notebooks."""

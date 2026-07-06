@@ -6,6 +6,16 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Lock-in auto-reconnect (survives a USB drop mid-run).** When Windows suspends
+  the USB device or the link drops, the VISA session dies and reads throw
+  NI-VISA/USB errors that abort the measurement. `Ametek7270.ask` now catches any
+  I/O error, re-opens the VISA session (`reconnect()` — close + re-open to the
+  same resource, keeping the instrument's settings) and retries once. Every read
+  goes through `ask` (measurement properties use `values` → `ask`), so per-point
+  reads and commands are all covered; a transient disconnect recovers and the
+  sweep continues instead of crashing. (The prior wedged-link "clear + retry" is
+  subsumed by this.) The underlying cause is best removed in Windows: disable USB
+  selective suspend / "allow the computer to turn off this device".
 - **Lab notebook no longer shifts columns; clearer save errors.** The notebook
   header is written only when the file is new, so when a new column (`Setup`) was
   inserted into `LAB_NOTEBOOK_COLUMNS`, older files kept their old header and
@@ -21,10 +31,8 @@ lost.
   wedged instrument from that overload was making the next run's first command
   (`set_reference_mode`) time out over USB. Switched to single reference mode
   (`REFMODE 0`) reading `meas.x/y/mag/theta` (the fundamental at the modulation
-  frequency, same physical quantity), so demod2 is gone. Also made
-  `set_reference_mode` clear the VISA link and retry once on a comms error, so a
-  single wedged-link glitch recovers without a power cycle instead of aborting the
-  run.
+  frequency, same physical quantity), so demod2 is gone. (Comms glitches after an
+  overload are now handled by the lock-in auto-reconnect above.)
 - **All AC measurements modulate from the lock-in oscillator (no DAC modulation).**
   The X/Y/XY position sweeps used to also program a DAC sine modulation
   (`demod`/`freq`/`mod_amp`), on top of the lock-in oscillator. That was redundant

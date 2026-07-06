@@ -269,27 +269,54 @@ class Ametek7270(Instrument):
     def ask(self, command, query_delay=0):
         """Send a command and read the response, stripping white spaces.
 
-        Usually the properties use the
-        :meth:`~pymeasure.instruments.common_base.CommonBase.values`
-        method that adds a strip call, however several methods use directly the result from ask to
-        be cast into some other types. It should therefore also add the strip here, as all responses
-        end with a newline character.
-        """
-        return super().ask(command, query_delay).strip()
-
-    def reset_communication(self):
-        """Flush the VISA/USB buffers so a wedged link recovers without a power
-        cycle.
-
-        The USB link can stop accepting writes if a previous run left the
-        instrument in a bad state (e.g. after an input overload) or with an
-        unread response still queued.  A VISA ``clear`` resets the interface
-        without touching any measurement settings.  Best-effort: never raise.
+        On a communication failure (e.g. the USB link dropped or was suspended
+        by Windows mid-run), reconnect the VISA session and retry the command
+        once, so a transient disconnect does not abort a running measurement.
+        Every read goes through here — the measurement properties use
+        :meth:`~pymeasure.instruments.common_base.CommonBase.values`, which calls
+        ``ask`` — so this single guard covers per-point reads and commands alike.
         """
         try:
-            self.adapter.connection.clear()
+            return super().ask(command, query_delay).strip()
+        except Exception as exc:   # noqa: BLE001 - any VISA/USB I/O failure
+            log.warning(f"Lock-in I/O error on '{command}' ({exc}); "
+                        f"reconnecting and retrying once.")
+            self.reconnect()
+            return super().ask(command, query_delay).strip()
+
+    def reconnect(self):
+        """Re-open the VISA session to recover a dropped or power-suspended USB
+        link, without a power cycle.
+
+        The instrument keeps its settings across a USB suspend/resume, so a fresh
+        session simply resumes communication and the running measurement
+        continues.  Best-effort: logs and returns even if the re-open fails (the
+        retrying caller then surfaces the original error).
+        """
+        conn     = getattr(self.adapter, "connection", None)
+        resource = getattr(self.adapter, "resource_name", None)
+        manager  = getattr(self.adapter, "manager", None)
+        # Match the new session to the current one's terminations/timeout.
+        read_term  = getattr(conn, "read_termination", "\x00")
+        write_term = getattr(conn, "write_termination", "\x00")
+        timeout    = getattr(conn, "timeout", None)
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+        if resource is None or manager is None:
+            log.warning("Lock-in reconnect skipped: no VISA resource/manager available.")
+            return
+        try:
+            new_conn = manager.open_resource(resource, read_termination=read_term,
+                                             write_termination=write_term)
+            if timeout is not None:
+                new_conn.timeout = timeout
+            self.adapter.connection = new_conn
+            log.info("Lock-in VISA session reconnected.")
         except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
-            log.warning(f"Lock-in interface clear failed: {exc}")
+            log.warning(f"Lock-in reconnect failed: {exc}")
 
     def set_reference_mode(self, mode: int = 0):
         """Set the instrument in Single, Dual or harmonic mode.
@@ -300,15 +327,8 @@ class Ametek7270(Instrument):
         """
         if mode not in [0, 1, 2]:
             raise ValueError('Invalid reference mode')
-        # This is the first command each measurement sends.  If the link is
-        # wedged from a previous run, the write times out; clear the interface
-        # and retry once so a single glitch doesn't abort the whole run.
-        try:
-            self.ask(f'REFMODE {mode}')
-        except Exception as exc:   # noqa: BLE001 - broad: any VISA/IO failure
-            log.warning(f"REFMODE {mode} failed ({exc}); resetting link and retrying.")
-            self.reset_communication()
-            self.ask(f'REFMODE {mode}')
+        # ask() already reconnects + retries once on a communication error.
+        self.ask(f'REFMODE {mode}')
 
     def set_voltage_mode(self):
         """ Sets instrument to voltage control mode """
@@ -400,6 +420,9 @@ class OfflineLockin:
     # Command/configuration helpers — all no-ops returning empty/neutral values.
     def ask(self, command, query_delay=0):
         return ""
+
+    def reconnect(self):
+        pass
 
     def set_reference_mode(self, mode: int = 0):
         pass

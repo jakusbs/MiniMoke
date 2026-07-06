@@ -946,33 +946,53 @@ def test_2d_map_builds_image_sized_to_the_grid():
     assert (img.xsize, img.ysize) == (nx, ny), (img.xsize, img.ysize, nx, ny)
 
 
-def test_lockin_set_reference_mode_recovers_from_wedged_link():
-    """A timed-out REFMODE write must trigger a VISA clear + one retry, so a
-    single wedged-link glitch (e.g. after an overload) doesn't abort the run."""
+def test_lockin_ask_reconnects_and_retries_on_io_error():
+    """A dropped/suspended USB link must trigger a VISA reconnect + one retry, so
+    a transient disconnect doesn't abort a running measurement.  Every read goes
+    through ask() (measurements use values() -> ask()), so this covers per-point
+    reads too."""
     from src.classes.ametek7270_class import Ametek7270
 
     dsp = Ametek7270.__new__(Ametek7270)     # bypass hardware __init__
     events = []
+    state = {"up": False}                    # link starts DOWN (as if just dropped)
 
     class FakeConn:
-        def clear(self): events.append("clear")
+        read_termination = write_termination = "\x00"
+        timeout = 2000
+        def close(self): events.append("close")
+
+    class FakeManager:
+        def open_resource(self, resource, **kw):
+            events.append(("open", resource))
+            state["up"] = True               # reconnect brings the link back
+            return FakeConn()
 
     class FakeAdapter:
+        resource_name = "USB0::x::RAW"
+        manager = FakeManager()
         connection = FakeConn()
 
     dsp.adapter = FakeAdapter()
-    calls = {"n": 0}
 
-    def fake_ask(cmd, query_delay=0):
-        calls["n"] += 1
-        events.append(cmd)
-        if calls["n"] == 1:
-            raise RuntimeError("VI_ERROR_TMO")   # first write is wedged
-        return ""
-    dsp.ask = fake_ask
+    # Fake the low-level I/O that super().ask() drives (write/wait_for/read).
+    def fake_write(command, **kw):
+        events.append(("write", command))
+        if not state["up"]:
+            raise RuntimeError("VI_ERROR_CONN_LOST")   # link is down
+    def fake_read(**kw):
+        if not state["up"]:
+            raise RuntimeError("VI_ERROR_CONN_LOST")
+        return "1.23"   # pyvisa already strips the read_termination
 
-    dsp.set_reference_mode(0)                 # must clear + retry, not raise
-    assert events == ["REFMODE 0", "clear", "REFMODE 0"], events
+    dsp.write = fake_write
+    dsp.read = fake_read
+    dsp.wait_for = lambda *a, **k: None
+
+    result = dsp.ask("X.")                   # must reconnect + retry, not raise
+    assert result == "1.23"
+    assert ("open", "USB0::x::RAW") in events, events   # it reconnected
+    assert "close" in events                            # old session closed first
 
 
 # ---------------------------------------------------------------------------

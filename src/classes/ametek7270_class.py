@@ -25,9 +25,16 @@
 from pymeasure.instruments import Instrument
 from pymeasure.instruments.validators import modular_range, truncated_discrete_set, truncated_range, strict_range
 
+import time
 import logging
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
+
+# Auto-reconnect tuning: how many times to re-open the VISA session and retry a
+# failed command, and how long to wait after each re-open for a power-suspended
+# USB device to actually resume before retrying.
+RECONNECT_ATTEMPTS = 3
+RECONNECT_SETTLE_S = 1.0
 
 
 def check_read_not_empty(value):
@@ -280,9 +287,25 @@ class Ametek7270(Instrument):
             return super().ask(command, query_delay).strip()
         except Exception as exc:   # noqa: BLE001 - any VISA/USB I/O failure
             log.warning(f"Lock-in I/O error on '{command}' ({exc}); "
-                        f"reconnecting and retrying once.")
+                        f"re-opening the USB link and retrying.")
+
+        # A dropped or power-suspended USB link can need a moment — and more than
+        # one attempt — to come back, so reconnect and retry a few times before
+        # giving up (rather than aborting the whole measurement on one glitch).
+        last_exc = None
+        for attempt in range(1, RECONNECT_ATTEMPTS + 1):
             self.reconnect()
-            return super().ask(command, query_delay).strip()
+            time.sleep(RECONNECT_SETTLE_S)
+            try:
+                result = super().ask(command, query_delay).strip()
+                if attempt > 1:
+                    log.info(f"Lock-in link recovered after {attempt} reconnect attempts.")
+                return result
+            except Exception as exc:   # noqa: BLE001
+                last_exc = exc
+                log.warning(f"Lock-in still unreachable after reconnect attempt "
+                            f"{attempt}/{RECONNECT_ATTEMPTS}.")
+        raise last_exc
 
     def reconnect(self):
         """Re-open the VISA session to recover a dropped or power-suspended USB

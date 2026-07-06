@@ -10,7 +10,9 @@ lost.
   the USB device or the link drops, the VISA session dies and reads throw
   NI-VISA/USB errors that abort the measurement. `Ametek7270.ask` now catches any
   I/O error, re-opens the VISA session (`reconnect()` — close + re-open to the
-  same resource, keeping the instrument's settings) and retries once. Every read
+  same resource, keeping the instrument's settings) and retries — a few times
+  with a short settle, since a power-suspended device can take a moment (and more
+  than one attempt) to wake. Every read
   goes through `ask` (measurement properties use `values` → `ask`), so per-point
   reads and commands are all covered; a transient disconnect recovers and the
   sweep continues instead of crashing. (The prior wedged-link "clear + retry" is

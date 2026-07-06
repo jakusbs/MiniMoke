@@ -995,6 +995,48 @@ def test_lockin_ask_reconnects_and_retries_on_io_error():
     assert "close" in events                            # old session closed first
 
 
+def test_lockin_ask_retries_reconnect_until_link_recovers():
+    """A power-suspended device can need more than one re-open to wake; the retry
+    loop must keep trying (up to RECONNECT_ATTEMPTS) rather than give up after one."""
+    from src.classes.ametek7270_class import Ametek7270
+
+    dsp = Ametek7270.__new__(Ametek7270)
+    state = {"up": False, "opens": 0}
+
+    class FakeConn:
+        read_termination = write_termination = "\x00"
+        timeout = 2000
+        def close(self): pass
+
+    class FakeManager:
+        def open_resource(self, resource, **kw):
+            state["opens"] += 1
+            if state["opens"] >= 2:       # only the 2nd re-open brings it back
+                state["up"] = True
+            return FakeConn()
+
+    class FakeAdapter:
+        resource_name = "USB0::x::RAW"
+        manager = FakeManager()
+        connection = FakeConn()
+
+    dsp.adapter = FakeAdapter()
+
+    def fake_write(command, **kw):
+        if not state["up"]:
+            raise RuntimeError("USB suspended")
+    def fake_read(**kw):
+        if not state["up"]:
+            raise RuntimeError("USB suspended")
+        return "0.5"
+    dsp.write = fake_write
+    dsp.read = fake_read
+    dsp.wait_for = lambda *a, **k: None
+
+    assert dsp.ask("MAG.") == "0.5"
+    assert state["opens"] == 2, f"expected recovery on the 2nd re-open, got {state['opens']}"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

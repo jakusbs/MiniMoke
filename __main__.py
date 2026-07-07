@@ -197,13 +197,23 @@ class MainWindow(UIWindow):
 
         # The server base folder (e.g. Z:\projects\MOKE_mini) is expected to exist;
         # only the date/setup subfolders are created automatically.  If it isn't
-        # reachable (network drive disconnected, or the path is wrong), skip the
-        # copies with ONE clear message instead of three cryptic "WinError 3"s.
-        # The data is already saved locally, so nothing is lost.
+        # reachable from this process, skip the copies with ONE clear message
+        # instead of three cryptic "WinError 3"s.  The data is already saved
+        # locally, so nothing is lost.
+        #
+        # A "WinError 3 ... 'Z:\\'" while the drive looks mounted in Explorer is
+        # almost always a mapped-drive visibility issue: the mapping belongs to
+        # the interactive session (mapped drives aren't shared across a UAC/
+        # elevation boundary) or it silently disconnected while idle.  The robust
+        # cure is to point the server at the UNC path instead of a drive letter.
         if not os.path.isdir(server_base):
-            log.warning(f"Server folder '{server_base}' is not reachable "
-                        f"(network drive not mounted?). Data was saved locally "
-                        f"only; reconnect the drive to enable server copies.")
+            drive = os.path.splitdrive(server_base)[0]
+            hint = ""
+            if drive:
+                hint = (f" '{drive}' is a mapped drive; if it works in Explorer but "
+                        f"not here, use the full \\\\server\\share UNC path instead.")
+            log.warning(f"Server folder '{server_base}' is not reachable — data "
+                        f"saved locally only.{hint}")
             return
 
         #  general    -> <base>/Data/<date>/<setup>/

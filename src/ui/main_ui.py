@@ -128,7 +128,7 @@ class UIWindowBase(QtWidgets.QMainWindow):
         # PMOKE and LMOKE, so the geometry buttons only appear for it; the polar
         # setup is always PMOKE.
         self._setup_mode = "longitudinal"   # internal state
-        self._geometry   = "LMOKE"          # PMOKE / LMOKE (longitudinal only)
+        self._geometry   = "PMOKE"          # PMOKE / LMOKE (longitudinal only)
 
         toggle_container = QtWidgets.QWidget(self)
         toggle_container.setObjectName("setupToggle")

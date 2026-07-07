@@ -73,6 +73,11 @@ lost.
   range evenly. The colour (z) axis is user-selectable (defaults to
   `Voltage DC (V)`). Line and map update live side by side; procedures that are
   not a grid (B/X/Y/Time) contribute no image curve and leave the map empty.
+  The XY scan itself is a **single-pass serpentine raster** at a fixed field:
+  one measurement per grid point (it used to inherit the 1D sweeps' `+b/-b`
+  doubling and scan every column twice), snaking in y so the stage never flies
+  back to `y_min` between columns. `repeat_num` now repeats the whole map and
+  defaults to 1.
 - **Single lock-in session.** `meas` and `dsp` now refer to one `Ametek7270`
   instance (was two VISA sessions to the same instrument).
 - **Explicit lock-in reference mode.** X/Y/XY sweeps select dual-harmonic mode

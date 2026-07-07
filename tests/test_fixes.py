@@ -941,11 +941,52 @@ def test_sweep_visit_order_preserved():
     pxy.y_min, pxy.y_max, pxy.y_step = 0.0, 10.0, 10.0  # y = [0, 10] µm
     pxy.b, pxy.repeat_num = 0.1, 1
     pxy.acq_time = 0.001
+    # 2D map: one pass per point at fixed field 0.1, snaking in y (serpentine).
     assert capture(pxy) == [
-        (0.0,  0.0,  0.1), (0.0,  10.0,  0.1),          # x=0, +0.1, y inner
-        (0.0,  0.0, -0.1), (0.0,  10.0, -0.1),          # x=0, -0.1, y inner
-        (10.0, 0.0,  0.1), (10.0, 10.0,  0.1),          # x=10, +0.1, y inner
-        (10.0, 0.0, -0.1), (10.0, 10.0, -0.1),          # x=10, -0.1, y inner
+        (0.0,  0.0,  0.1), (0.0,  10.0,  0.1),          # x=0,  y up
+        (10.0, 10.0,  0.1), (10.0, 0.0,  0.1),          # x=10, y down (serpentine)
+    ]
+
+
+def test_xy_map_single_pass_serpentine_no_duplicate_lines():
+    """The 2D map must visit each grid point exactly once at a fixed field (no
+    +b/-b doubling) and snake in y (serpentine).  Reproduces the reported
+    'doing the same line twice' — each column used to be scanned twice."""
+    import src.procedures.position_sweep as ps
+    import src.procedures.xy_sweep_proc as xyp
+
+    fakes = _patch_proc_module(ps)
+    state = {"x": 0.0, "y": 0.0}
+    fakes["stage"].move_x_to = lambda v: state.__setitem__("x", float(v))
+    fakes["stage"].move_y_to = lambda v: state.__setitem__("y", float(v))
+    fakes["stage"].get_x_pos = lambda: state["x"]
+    fakes["stage"].get_y_pos = lambda: state["y"]
+
+    p = xyp.XY_Sweep()
+    p.set_sample_name("t")
+    p.x_min, p.x_max, p.x_step = 0.0, 20.0, 10.0    # x = [0, 10, 20] µm
+    p.y_min, p.y_max, p.y_step = 0.0, 10.0, 10.0    # y = [0, 10] µm
+    p.b, p.repeat_num, p.acq_time = 0.3, 1, 0.001
+
+    visits = []
+    def emit(topic, rec=None, **k):
+        if topic == "results":
+            visits.append((round(rec["X Position (um)"], 6),
+                           round(rec["Y Position (um)"], 6),
+                           round(rec["Magnetic Field (A)"], 6)))
+    p.emit = emit
+    p.should_stop = lambda: False
+    p.startup()
+    p.execute()
+
+    xy_points = [(x, y) for (x, y, _b) in visits]
+    assert len(xy_points) == 6, f"expected 3x2 grid = 6 points, got {len(xy_points)}"
+    assert len(set(xy_points)) == 6, "a grid point was scanned more than once"
+    assert {b for (_x, _y, b) in visits} == {0.3}, "field must be a single fixed value"
+    assert visits == [
+        (0.0,  0.0,  0.3), (0.0,  10.0,  0.3),          # x=0  y up
+        (10.0, 10.0,  0.3), (10.0, 0.0,  0.3),          # x=10 y down
+        (20.0, 0.0,  0.3), (20.0, 10.0,  0.3),          # x=20 y up (serpentine)
     ]
 
 

@@ -52,7 +52,7 @@ class XY_Sweep(PositionSweep):
     y_max      = FloatParameter('To y',                   units='um',  default=section.get("y_max", 100))
     y_step     = FloatParameter('Step y',                 units='um',  default=section.get("y_step", 10))
     b          = FloatParameter('Field ',                 units='A',   default=section.get("b", 0.),              minimum=-6,   maximum=6)
-    repeat_num = FloatParameter('Repeat number ',         units='',    default=section.get("repeat_num", 3),      minimum=1,    maximum=100)
+    repeat_num = FloatParameter('Repeat number ',         units='',    default=section.get("repeat_num", 1),      minimum=1,    maximum=100)
 
     @staticmethod
     def _axis_points(lo, hi, step) -> int:
@@ -63,22 +63,28 @@ class XY_Sweep(PositionSweep):
         return int(np.abs(hi - lo) // step + 1)
 
     def _configure_scan(self):
-        # Grid scan.  Order: x outer, field-direction middle, y inner — i.e. at
-        # each x and each field direction, sweep all of y.  Iteration = x-index
-        # (kept as in the original to preserve the saved-data semantics).
+        # 2D map: raster the grid ONCE per point at a fixed field ``b`` — no
+        # +b/-b field doubling (that scanned every column twice) — snaking in y
+        # (serpentine) so the stage never flies back to y_min between columns:
+        # each column sweeps y in the opposite direction to the previous one.
+        # Each column is one "loop" (its own line in the results graph); the 2D
+        # map bins by position, so the snaking visit order still fills the grid
+        # correctly.  ``repeat_num`` repeats the whole map (its own loops).
         nx = self._axis_points(self.x_min, self.x_max, self.x_step)
         ny = self._axis_points(self.y_min, self.y_max, self.y_step)
         self.x_values = np.linspace(self.x_min, self.x_max, nx, endpoint=True)
         self.y_values = np.linspace(self.y_min, self.y_max, ny, endpoint=True)
-        # Each y-sweep (fixed x, fixed field direction) is one loop in the plot.
-        field_seq = [self.b, -self.b] * int(self.repeat_num)
-        n_dir = len(field_seq)
-        self._scan_sequence = [(xv, yv, item, i, i * n_dir + fp)
-                               for i, xv in enumerate(self.x_values)
-                               for fp, item in enumerate(field_seq)
-                               for yv in self.y_values]
 
-        self.exp_type_md = "Sweep along x and y (grid)"
+        self._scan_sequence = []
+        loop = 0
+        for _ in range(max(int(self.repeat_num), 1)):
+            for i, xv in enumerate(self.x_values):
+                ys = self.y_values if (i % 2 == 0) else self.y_values[::-1]
+                for yv in ys:
+                    self._scan_sequence.append((xv, yv, self.b, i, loop))
+                loop += 1   # each column is its own line segment
+
+        self.exp_type_md = "Map along x and y (grid, serpentine)"
         self.nb_it_md    = len(self.x_values) * len(self.y_values)
 
     # ── 2D-map grid bounds ────────────────────────────────────────────────────

@@ -24,8 +24,10 @@ lost.
   every later row shifted one column right. Appends now align to the file's *own*
   header, so a schema change can never shift an existing notebook (start a fresh
   notebook to pick up new columns). Also: the data-file save is wrapped so a
-  permission/disk error shows a clear dialog instead of crashing the queue, and
-  the notebook/server warnings hint at the usual cause (file open in Excel).
+  permission/disk error shows a clear dialog instead of crashing the queue, the
+  notebook/server warnings hint at the usual cause (file open in Excel), and an
+  unmounted server drive is reported once ("server not reachable — saved locally
+  only") instead of three cryptic `WinError 3`s.
 - **Single reference mode (no more demod2 overload/spikes).** The AC lock-in
   measurements (X/Y/XY, AC B-sweep, Time) were using the 7270's dual-harmonic
   mode (`REFMODE 1`) and reading `meas.x1/…`. That runs a *second* demodulator at

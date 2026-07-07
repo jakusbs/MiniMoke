@@ -456,6 +456,7 @@ def test_archive_experiment_writes_local_notebook_and_server_copies():
     local_data = os.path.join(d, "Desktop", "Data")
     server     = os.path.join(d, "server")
     os.makedirs(local_data, exist_ok=True)
+    os.makedirs(server, exist_ok=True)          # server base pre-exists (as on the rig)
     src_csv = os.path.join(local_data, "sampleA_B-Sweep_x.csv")
     with open(src_csv, "w") as f:
         f.write("Iteration\n0\n")
@@ -504,6 +505,56 @@ def test_archive_experiment_writes_local_notebook_and_server_copies():
     assert rec["Operator"] == "Jakub"
     assert rec["Field start (A)"] == "-0.5" and rec["Field stop (A)"] == "0.5"
     assert rec["Setup"] == "longitudinal" and rec["Geometry"] == "LMOKE"
+
+
+def test_archive_skips_server_copies_when_drive_not_mounted():
+    """If the server share is unreachable (e.g. the Z: drive isn't mounted), the
+    archive must skip the server copies cleanly — no crash — and still write the
+    local notebook.  Reproduces the reported '[WinError 3] ... Z:\\' warnings."""
+    import os
+    import time
+    import types
+    import tempfile
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("moke_main_srv", os.path.join(_REPO, "__main__.py"))
+    moke_main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(moke_main)
+
+    d = tempfile.mkdtemp()
+    local_data = os.path.join(d, "Desktop", "Data")
+    os.makedirs(local_data, exist_ok=True)
+    src_csv = os.path.join(local_data, "s_B-Sweep_x.csv")
+    with open(src_csv, "w") as f:
+        f.write("Iteration\n0\n")
+
+    # Points at a path that does not exist — mimics an unmounted network drive.
+    unreachable = os.path.join(d, "no_such_server_root", "MOKE_mini")
+
+    class FakeLine:
+        def __init__(self, t): self._t = t
+        def text(self): return self._t
+
+    class FakeProc:
+        name = "B-Sweep"
+        nb_it_md = 1
+        def parameter_objects(self): return {}
+
+    class FakeExp:
+        data_filename = src_csv
+        procedure = FakeProc()
+
+    fake_self = types.SimpleNamespace(
+        operator_line=FakeLine("op"), server_line=FakeLine(unreachable),
+        sample_name_line=FakeLine("s"), directory_input=True, directory=local_data,
+        _setup_mode="longitudinal", _geometry="LMOKE", _run_start=time.time(),
+    )
+
+    moke_main.MainWindow._archive_experiment(fake_self, FakeExp())   # must not raise
+
+    # Local notebook still written; nothing created under the unreachable server.
+    assert os.path.exists(os.path.join(d, "Desktop", "lab notebook", "lab_notebook_MINImoke.csv"))
+    assert not os.path.exists(os.path.join(d, "no_such_server_root"))
 
 
 def test_default_x_axis_is_valid_and_time_selectable():

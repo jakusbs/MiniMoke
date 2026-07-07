@@ -194,6 +194,18 @@ class MainWindow(UIWindow):
         if not server_base:
             return
         server_base = os.path.normpath(server_base)   # clean, OS-native separators
+
+        # The server base folder (e.g. Z:\projects\MOKE_mini) is expected to exist;
+        # only the date/setup subfolders are created automatically.  If it isn't
+        # reachable (network drive disconnected, or the path is wrong), skip the
+        # copies with ONE clear message instead of three cryptic "WinError 3"s.
+        # The data is already saved locally, so nothing is lost.
+        if not os.path.isdir(server_base):
+            log.warning(f"Server folder '{server_base}' is not reachable "
+                        f"(network drive not mounted?). Data was saved locally "
+                        f"only; reconnect the drive to enable server copies.")
+            return
+
         #  general    -> <base>/Data/<date>/<setup>/
         #  per-operator -> <base>/<operator>/<sample>/<setup>/<date>/
         general_dir  = os.path.join(server_base, "Data", date_folder, self._setup_mode)

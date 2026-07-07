@@ -187,13 +187,21 @@ class MainWindow(UIWindow):
             local_nb = os.path.join(desktop, "lab notebook", LAB_NOTEBOOK_FILENAME)
             append_lab_notebook(local_nb, row)
         except Exception as exc:
-            log.warning(f"Could not update local lab notebook: {exc}")
+            log.warning(f"Could not update local lab notebook (is it open in Excel?): {exc}")
 
         # Server copies and the server lab notebook.
         server_base = self.server_line.text().strip()
         if not server_base:
             return
         server_base = os.path.normpath(server_base)   # clean, OS-native separators
+        # If the server share isn't mounted (e.g. the mapped Z: drive isn't
+        # visible to this process), skip the server copies cleanly — the data is
+        # already saved locally — instead of emitting a cryptic
+        # '[WinError 3] ... Z:\' for every copy target.
+        if not os.path.isdir(server_base):
+            log.warning(f"Server '{server_base}' not reachable — data saved locally only "
+                        "(is the network drive mounted?).")
+            return
         #  general    -> <base>/Data/<date>/<setup>/
         #  per-operator -> <base>/<operator>/<sample>/<setup>/<date>/
         general_dir  = os.path.join(server_base, "Data", date_folder, self._setup_mode)
@@ -208,7 +216,7 @@ class MainWindow(UIWindow):
             # Directly in the server base (\\d.ethz.ch\groups\matl\intermag\projects\MOKE_mini\lab_notebook_MINImoke.csv).
             append_lab_notebook(os.path.join(server_base, LAB_NOTEBOOK_FILENAME), row)
         except Exception as exc:
-            log.warning(f"Could not update server lab notebook: {exc}")
+            log.warning(f"Could not update server lab notebook (is it open in Excel?): {exc}")
 
     def queue(self, procedure=None):
         """Queue the next experiment and persist results to the data folder.
@@ -228,18 +236,28 @@ class MainWindow(UIWindow):
                 QtWidgets.QMessageBox.warning(self, "Cannot queue measurement", message)
                 return
 
-        # Build <base>/<date>/<mode>/ and create it if needed
+        # Build <base>/<date>/<mode>/ and create it if needed.  A permission or
+        # disk error here (folder locked, read-only share, disk full) should show
+        # a clear dialog instead of crashing the queue with a bare traceback.
         from datetime import date
         date_folder = date.today().strftime("%Y-%m-%d")
         save_dir = os.path.join(self.directory, date_folder, self._setup_mode)
-        os.makedirs(save_dir, exist_ok=True)
-
-        file = unique_filename(
-            directory=save_dir,
-            prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
-            datetimeformat="%Y-%m-%d-%Hh%M",
-        )
-        results    = Results(procedure, file)
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            file = unique_filename(
+                directory=save_dir,
+                prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
+                datetimeformat="%Y-%m-%d-%Hh%M",
+            )
+            results = Results(procedure, file)
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Cannot save measurement",
+                f"Could not create the data file in:\n{save_dir}\n\n{exc}\n\n"
+                "Check the folder exists and is writable (is a file open in Excel, "
+                "or is the disk full?).",
+            )
+            return
         experiment = self.new_experiment(results)
         self.manager.queue(experiment)
 

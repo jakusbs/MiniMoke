@@ -117,7 +117,7 @@ class MainWindow(UIWindow):
         # Server base: data + lab notebook are copied under here after each run.
         # General folder    -> <base>/Data/<date>/<mode>/
         # Per-operator folder -> <base>/<operator>/Data/<date>/<mode>/
-        self.server_line.setText("Z:/projects/MOKE_mini")
+        self.server_line.setText("//d.ethz.ch/groups/matl/intermag/projects/MOKE_mini")
 
     # ── Post-measurement archiving ────────────────────────────────────────────
 
@@ -187,35 +187,13 @@ class MainWindow(UIWindow):
             local_nb = os.path.join(desktop, "lab notebook", LAB_NOTEBOOK_FILENAME)
             append_lab_notebook(local_nb, row)
         except Exception as exc:
-            log.warning(f"Could not update local lab notebook (is it open in Excel?): {exc}")
+            log.warning(f"Could not update local lab notebook: {exc}")
 
         # Server copies and the server lab notebook.
         server_base = self.server_line.text().strip()
         if not server_base:
             return
         server_base = os.path.normpath(server_base)   # clean, OS-native separators
-
-        # The server base folder (e.g. Z:\projects\MOKE_mini) is expected to exist;
-        # only the date/setup subfolders are created automatically.  If it isn't
-        # reachable from this process, skip the copies with ONE clear message
-        # instead of three cryptic "WinError 3"s.  The data is already saved
-        # locally, so nothing is lost.
-        #
-        # A "WinError 3 ... 'Z:\\'" while the drive looks mounted in Explorer is
-        # almost always a mapped-drive visibility issue: the mapping belongs to
-        # the interactive session (mapped drives aren't shared across a UAC/
-        # elevation boundary) or it silently disconnected while idle.  The robust
-        # cure is to point the server at the UNC path instead of a drive letter.
-        if not os.path.isdir(server_base):
-            drive = os.path.splitdrive(server_base)[0]
-            hint = ""
-            if drive:
-                hint = (f" '{drive}' is a mapped drive; if it works in Explorer but "
-                        f"not here, use the full \\\\server\\share UNC path instead.")
-            log.warning(f"Server folder '{server_base}' is not reachable — data "
-                        f"saved locally only.{hint}")
-            return
-
         #  general    -> <base>/Data/<date>/<setup>/
         #  per-operator -> <base>/<operator>/<sample>/<setup>/<date>/
         general_dir  = os.path.join(server_base, "Data", date_folder, self._setup_mode)
@@ -227,10 +205,10 @@ class MainWindow(UIWindow):
             except Exception as exc:
                 log.warning(f"Could not copy data to server '{dest_dir}': {exc}")
         try:
-            # Directly in the server base (Z:/projects/MOKE_mini/lab_notebook_MINImoke.csv).
+            # Directly in the server base (\\d.ethz.ch\groups\matl\intermag\projects\MOKE_mini\lab_notebook_MINImoke.csv).
             append_lab_notebook(os.path.join(server_base, LAB_NOTEBOOK_FILENAME), row)
         except Exception as exc:
-            log.warning(f"Could not update server lab notebook (is it open in Excel?): {exc}")
+            log.warning(f"Could not update server lab notebook: {exc}")
 
     def queue(self, procedure=None):
         """Queue the next experiment and persist results to the data folder.
@@ -254,28 +232,14 @@ class MainWindow(UIWindow):
         from datetime import date
         date_folder = date.today().strftime("%Y-%m-%d")
         save_dir = os.path.join(self.directory, date_folder, self._setup_mode)
+        os.makedirs(save_dir, exist_ok=True)
 
-        # Creating the folder / data file can fail (read-only folder, drive not
-        # mounted, or the file open in another program).  Surface it clearly
-        # instead of letting an unhandled PermissionError abort the queue.
-        try:
-            os.makedirs(save_dir, exist_ok=True)
-            file = unique_filename(
-                directory=save_dir,
-                prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
-                datetimeformat="%Y-%m-%d-%Hh%M",
-            )
-            results = Results(procedure, file)
-        except OSError as exc:
-            QtWidgets.QMessageBox.critical(
-                self, "Cannot save data",
-                f"Could not create the data file in:\n{save_dir}\n\n{exc}\n\n"
-                f"Check that the folder exists and is writable, that the drive is "
-                f"connected, and that no file there is open in another program "
-                f"(e.g. Excel).",
-            )
-            return
-
+        file = unique_filename(
+            directory=save_dir,
+            prefix=self.sample_name_line.text() + "_" + procedure.name + "_",
+            datetimeformat="%Y-%m-%d-%Hh%M",
+        )
+        results    = Results(procedure, file)
         experiment = self.new_experiment(results)
         self.manager.queue(experiment)
 

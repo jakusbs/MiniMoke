@@ -1160,6 +1160,67 @@ def test_lockin_reconnect_clears_device_to_unwedge_link():
     assert cleared["n"] == 1, "reconnect must clear the device to flush a wedged link"
 
 
+def test_failed_run_resets_controls_and_archives_like_finished():
+    """pymeasure emits `failed` (never `finished`) when a worker crashes.  The
+    window must handle it like a finished run — reset the controls and archive —
+    otherwise the Abort button stays armed after an overnight crash (the
+    'Attempting to abort when no experiment is running' traceback) and the
+    partial data never reaches the server/notebook."""
+    import types
+    import inspect
+    import src.ui.main_ui as mui
+
+    # The signal is wired up in the window (the wiring lives in UIWindowBase)...
+    assert "self.manager.failed.connect(self.failed)" in inspect.getsource(mui.UIWindowBase), \
+        "manager.failed must be connected, or a crashed run leaves the UI stuck"
+
+    # ...and the handler delegates to finished() (which MainWindow extends with
+    # archiving), so failed runs get the same reset + archive treatment.
+    seen = []
+    fake = types.SimpleNamespace(finished=lambda exp: seen.append(exp))
+    exp = object()
+    mui.UIWindow.failed(fake, exp)
+    assert seen == [exp]
+
+
+def test_abort_with_no_running_experiment_resets_button_quietly():
+    """Clicking Abort after a run already ended/crashed used to log an ERROR
+    traceback and leave the button disabled but rewired to resume().  It must
+    reset the button to a disabled 'Abort' state without an error."""
+    import types
+    import src.ui.main_ui as mui
+
+    calls = {"enabled": [], "text": [], "connected": []}
+
+    class FakeSignal:
+        def disconnect(self):
+            pass
+        def connect(self, slot):
+            calls["connected"].append(slot)
+
+    class FakeButton:
+        clicked = FakeSignal()
+        def setEnabled(self, v):
+            calls["enabled"].append(v)
+        def setText(self, t):
+            calls["text"].append(t)
+
+    class FakeManager:
+        def abort(self):
+            raise Exception("Attempting to abort when no experiment is running")
+        def is_running(self):
+            return False
+
+    fake = types.SimpleNamespace(abort_button=FakeButton(), manager=FakeManager())
+    fake.resume = lambda: None
+    fake.abort = lambda: None
+    mui.UIWindow.abort(fake)
+
+    assert calls["text"][-1] == "Abort"
+    assert calls["enabled"][-1] is False, "nothing to abort -> button must stay disabled"
+    assert calls["connected"][-1] is fake.abort, "button must be wired back to abort()"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

@@ -212,6 +212,7 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.manager.queued.connect(self.queued)
         self.manager.running.connect(self.running)
         self.manager.finished.connect(self.finished)
+        self.manager.failed.connect(self.failed)
         self.manager.log.connect(log.handle)
 
     def _set_setup_mode(self, mode: str):
@@ -782,11 +783,18 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.abort_button.clicked.connect(self.resume)
         try:
             self.manager.abort()
-        except:  # noqa
-            log.error('Failed to abort experiment', exc_info=True)
+        except Exception:
+            # Distinguish a real abort failure from the benign "nothing is
+            # running" case (e.g. the run already ended or crashed).
+            still_running = self.manager.is_running()
+            if still_running:
+                log.error('Failed to abort experiment', exc_info=True)
+            else:
+                log.info('Abort clicked but no experiment is running — controls reset.')
             self.abort_button.setText("Abort")
             self.abort_button.clicked.disconnect()
             self.abort_button.clicked.connect(self.abort)
+            self.abort_button.setEnabled(still_running)
 
     def resume(self):
         self.abort_button.setText("Abort")
@@ -817,6 +825,19 @@ class UIWindowBase(QtWidgets.QMainWindow):
         if not self.manager.experiments.has_next():
             self.abort_button.setEnabled(False)
             self.browser_widget.clear_button.setEnabled(True)
+
+    def failed(self, experiment):
+        """A crashed run emits `failed` — `finished` never fires for it.
+
+        Treat it exactly like a finished run: reset the controls (otherwise the
+        Abort button stays armed after the crash and later raises 'Attempting to
+        abort when no experiment is running') and let subclasses archive the
+        partial data, which pymeasure has been streaming to the local file all
+        along.
+        """
+        log.warning("The run crashed — controls reset; data measured up to the "
+                    "failure is kept (and archived) like a finished run.")
+        self.finished(experiment)
 
     @property
     def directory(self):

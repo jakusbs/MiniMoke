@@ -6,6 +6,15 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **A crashed run now resets the window and archives its partial data.** pymeasure
+  emits `failed` (never `finished`) when a worker crashes, but the window only
+  connected `finished` — so after an overnight crash the Abort button stayed
+  armed (clicking it raised "Attempting to abort when no experiment is running")
+  and `_archive_experiment` never ran, so the partial data that pymeasure had
+  been streaming to the local CSV all along never got its server copy or
+  lab-notebook row. `manager.failed` is now handled like `finished` (controls
+  reset + archive), and clicking Abort when nothing is running quietly resets
+  the button instead of logging an ERROR traceback.
 - **Lock-in auto-reconnect (survives a USB drop/wedge mid-run).** When Windows
   suspends the USB device, the link drops, or an EMI glitch (e.g. the field coils
   switching) interrupts a command, the VISA session dies or the instrument wedges

@@ -30,10 +30,12 @@ import logging
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
 
-# Auto-reconnect tuning: how many times to re-open the VISA session and retry a
-# failed command, and how long to wait after each re-open for a power-suspended
-# USB device to actually resume before retrying.
-RECONNECT_ATTEMPTS = 3
+# Auto-reconnect tuning: how many times to re-open the VISA session (clearing the
+# device each time) and retry a failed command, and the base settle time after
+# each re-open.  The wait grows with the attempt number (1x, 2x, 3x ...) so a
+# power-suspended USB device, which can take several seconds to actually resume,
+# gets progressively more time before the retry.
+RECONNECT_ATTEMPTS = 4
 RECONNECT_SETTLE_S = 1.0
 
 
@@ -295,7 +297,7 @@ class Ametek7270(Instrument):
         last_exc = None
         for attempt in range(1, RECONNECT_ATTEMPTS + 1):
             self.reconnect()
-            time.sleep(RECONNECT_SETTLE_S)
+            time.sleep(RECONNECT_SETTLE_S * attempt)   # progressively longer for a slow-to-resume device
             try:
                 result = super().ask(command, query_delay).strip()
                 if attempt > 1:
@@ -308,13 +310,19 @@ class Ametek7270(Instrument):
         raise last_exc
 
     def reconnect(self):
-        """Re-open the VISA session to recover a dropped or power-suspended USB
-        link, without a power cycle.
+        """Re-open the VISA session *and clear the device* to recover a dropped,
+        power-suspended, or wedged USB link, without a power cycle.
 
-        The instrument keeps its settings across a USB suspend/resume, so a fresh
-        session simply resumes communication and the running measurement
-        continues.  Best-effort: logs and returns even if the re-open fails (the
-        retrying caller then surfaces the original error).
+        A fresh session alone is often not enough: if the instrument's USB I/O
+        buffers or command parser are stuck — e.g. a command was interrupted by
+        an EMI glitch when the field coils switched, or the parser hung after an
+        input overload — the re-open succeeds but the very next write still times
+        out (exactly the symptom seen in the field logs).  So after re-opening we
+        issue a VISA device clear (``viClear``), which flushes the device's I/O
+        buffers and un-wedges it.  The instrument keeps its settings across a
+        suspend/clear, so the running measurement resumes.  Best-effort: logs and
+        returns even if a step fails (the retrying caller then surfaces the
+        original error).
         """
         conn     = getattr(self.adapter, "connection", None)
         resource = getattr(self.adapter, "resource_name", None)
@@ -336,8 +344,14 @@ class Ametek7270(Instrument):
                                              write_termination=write_term)
             if timeout is not None:
                 new_conn.timeout = timeout
+            # Flush the device's I/O buffers so a wedged parser/endpoint accepts
+            # the next command — a fresh session by itself does not do this.
+            try:
+                new_conn.clear()
+            except Exception as exc:   # noqa: BLE001 - not every backend implements clear()
+                log.debug(f"Lock-in device clear skipped: {exc}")
             self.adapter.connection = new_conn
-            log.info("Lock-in VISA session reconnected.")
+            log.info("Lock-in VISA session reconnected (device cleared).")
         except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
             log.warning(f"Lock-in reconnect failed: {exc}")
 

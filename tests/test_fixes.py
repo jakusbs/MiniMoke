@@ -1129,6 +1129,37 @@ def test_lockin_ask_retries_reconnect_until_link_recovers():
     assert state["opens"] == 2, f"expected recovery on the 2nd re-open, got {state['opens']}"
 
 
+def test_lockin_reconnect_clears_device_to_unwedge_link():
+    """Re-opening the VISA session alone isn't enough when the instrument's USB
+    buffers/parser are wedged: in the field the reconnect succeeded ('session
+    reconnected') but the very next write still timed out.  reconnect() must also
+    issue a VISA device clear (viClear) on the fresh session to flush the device
+    so the next command goes through."""
+    from src.classes.ametek7270_class import Ametek7270
+
+    dsp = Ametek7270.__new__(Ametek7270)
+    cleared = {"n": 0}
+
+    class FakeConn:
+        read_termination = write_termination = "\x00"
+        timeout = 2000
+        def close(self): pass
+        def clear(self): cleared["n"] += 1
+
+    class FakeManager:
+        def open_resource(self, resource, **kw):
+            return FakeConn()
+
+    class FakeAdapter:
+        resource_name = "USB0::x::RAW"
+        manager = FakeManager()
+        connection = FakeConn()
+
+    dsp.adapter = FakeAdapter()
+    dsp.reconnect()
+    assert cleared["n"] == 1, "reconnect must clear the device to flush a wedged link"
+
+
 # ---------------------------------------------------------------------------
 # Minimal runner (so the suite works without pytest)
 # ---------------------------------------------------------------------------

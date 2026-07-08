@@ -6,18 +6,24 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
-- **Lock-in auto-reconnect (survives a USB drop mid-run).** When Windows suspends
-  the USB device or the link drops, the VISA session dies and reads throw
-  NI-VISA/USB errors that abort the measurement. `Ametek7270.ask` now catches any
-  I/O error, re-opens the VISA session (`reconnect()` — close + re-open to the
-  same resource, keeping the instrument's settings) and retries — a few times
-  with a short settle, since a power-suspended device can take a moment (and more
-  than one attempt) to wake. Every read
-  goes through `ask` (measurement properties use `values` → `ask`), so per-point
-  reads and commands are all covered; a transient disconnect recovers and the
-  sweep continues instead of crashing. (The prior wedged-link "clear + retry" is
-  subsumed by this.) The underlying cause is best removed in Windows: disable USB
-  selective suspend / "allow the computer to turn off this device".
+- **Lock-in auto-reconnect (survives a USB drop/wedge mid-run).** When Windows
+  suspends the USB device, the link drops, or an EMI glitch (e.g. the field coils
+  switching) interrupts a command, the VISA session dies or the instrument wedges
+  and reads throw NI-VISA/USB errors that abort the measurement. `Ametek7270.ask`
+  now catches any I/O error, re-opens the VISA session **and issues a VISA device
+  clear** (`reconnect()` — close + re-open to the same resource + `viClear`,
+  keeping the instrument's settings), then retries — a few times with a
+  progressively longer settle, since a power-suspended device can take several
+  seconds (and more than one attempt) to wake. The device clear is the key part:
+  field logs showed the session re-opening successfully yet the *next write still
+  timing out*, because a fresh session alone doesn't flush a stuck USB
+  buffer/parser — a `viClear` does. Every read goes through `ask` (measurement
+  properties use `values` → `ask`), so per-point reads and commands are all
+  covered; a transient disconnect/wedge recovers and the sweep continues instead
+  of crashing. The underlying cause is best removed at the source: disable USB
+  selective suspend / "allow the computer to turn off this device" in Windows,
+  use a shielded USB cable with a ferrite and keep it away from the coil leads,
+  and (if available) prefer GPIB/RS232 over USB for EMI immunity.
 - **Lab notebook no longer shifts columns; clearer save errors.** The notebook
   header is written only when the file is new, so when a new column (`Setup`) was
   inserted into `LAB_NOTEBOOK_COLUMNS`, older files kept their old header and

@@ -20,6 +20,24 @@ polar_stage = PolarStage()
 log         = logging.getLogger(__name__)
 
 
+def _lockin_resource_from_config(path='configs/instruments_config.ini'):
+    """Optional override of the lock-in VISA resource string.
+
+    Lets the rig switch the 7270 to another interface (e.g. its Ethernet port,
+    ``TCPIP0::<ip>::50000::SOCKET``) by editing a config file instead of the
+    code.  Returns None when the file/section/key is absent, in which case the
+    driver's built-in USB default is used.
+    """
+    import configparser
+    try:
+        cp = configparser.ConfigParser()
+        if not cp.read(path):
+            return None
+        return cp.get('LockIn', 'resource', fallback=None) or None
+    except Exception:
+        return None
+
+
 def _make_lockin():
     """Construct an Ametek 7270 lock-in, falling back to an offline stub.
 
@@ -28,8 +46,9 @@ def _make_lockin():
     application launchable in exactly the same way a missing DAC / Hall sensor /
     stage already is, instead of crashing at import time.
     """
+    resource = _lockin_resource_from_config()
     try:
-        return Ametek7270()
+        return Ametek7270(resource) if resource else Ametek7270()
     except Exception as err:
         print(f"Lock-in (Ametek 7270) not found: {err}")
         return OfflineLockin()

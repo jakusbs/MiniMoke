@@ -25,7 +25,9 @@
 from pymeasure.instruments import Instrument
 from pymeasure.instruments.validators import modular_range, truncated_discrete_set, truncated_range, strict_range
 
+import sys
 import time
+import subprocess
 import logging
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
@@ -37,6 +39,12 @@ log.addHandler(logging.NullHandler())
 # gets progressively more time before the retry.
 RECONNECT_ATTEMPTS = 4
 RECONNECT_SETTLE_S = 1.0
+# From this attempt on, escalate to a bus-level USB re-enumeration (the software
+# equivalent of unplugging and replugging the cable) before re-opening the
+# session — a hard-hung instrument interface ignores session re-opens and device
+# clears but re-initialises its USB stack on a bus reset.
+USB_RESET_FROM_ATTEMPT = 3
+USB_RESET_SETTLE_S     = 5.0   # give Windows time to re-enumerate the device
 
 
 def check_read_not_empty(value):
@@ -296,6 +304,11 @@ class Ametek7270(Instrument):
         # giving up (rather than aborting the whole measurement on one glitch).
         last_exc = None
         for attempt in range(1, RECONNECT_ATTEMPTS + 1):
+            if attempt >= USB_RESET_FROM_ATTEMPT:
+                # Session re-open + device clear didn't help: the instrument's
+                # USB interface is likely hard-hung.  Escalate to a bus-level
+                # reset (re-enumerate the device, as if the cable was replugged).
+                self._reset_usb_device()
             self.reconnect()
             time.sleep(RECONNECT_SETTLE_S * attempt)   # progressively longer for a slow-to-resume device
             try:
@@ -307,6 +320,12 @@ class Ametek7270(Instrument):
                 last_exc = exc
                 log.warning(f"Lock-in still unreachable after reconnect attempt "
                             f"{attempt}/{RECONNECT_ATTEMPTS}.")
+        log.error(
+            "Lock-in did not respond after re-opening, clearing and resetting the "
+            "USB link %d times — its interface looks hard-hung. Power-cycle the "
+            "7270 (or unplug/replug its USB cable). If this keeps happening, "
+            "consider running it over Ethernet instead of USB (see "
+            "configs/instruments_config.ini).", RECONNECT_ATTEMPTS)
         raise last_exc
 
     def reconnect(self):
@@ -354,6 +373,57 @@ class Ametek7270(Instrument):
             log.info("Lock-in VISA session reconnected (device cleared).")
         except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
             log.warning(f"Lock-in reconnect failed: {exc}")
+
+    @staticmethod
+    def _usb_instance_id(resource_name):
+        """Derive the Windows device-instance ID from a VISA USB resource name.
+
+        'USB0::0x0A2D::0x001B::15342534::RAW' -> 'USB\\VID_0A2D&PID_001B\\15342534'
+        Returns None for non-USB resources (e.g. Ethernet) or unparsable strings.
+        """
+        parts = str(resource_name or "").split("::")
+        if len(parts) < 4 or not parts[0].upper().startswith("USB"):
+            return None
+        try:
+            vid = f"{int(parts[1], 0):04X}"   # int(_, 0) accepts 0x0A2D and 2605 alike
+            pid = f"{int(parts[2], 0):04X}"
+        except ValueError:
+            return None
+        return f"USB\\VID_{vid}&PID_{pid}\\{parts[3]}"
+
+    def _reset_usb_device(self):
+        """Bus-level recovery: re-enumerate the USB device — the software
+        equivalent of unplugging and replugging the cable.
+
+        A hard-hung instrument interface (e.g. after an EMI glitch from the field
+        coils) ignores session re-opens and device clears, but a USB bus reset
+        forces it to re-initialise its USB stack.  Uses
+        ``pnputil /restart-device`` with the instance ID derived from the VISA
+        resource, so only the lock-in is touched.  Windows-only; needs the
+        program to run with administrator rights; best-effort (returns False on
+        any failure and the reconnect ladder simply continues).
+        """
+        if sys.platform != "win32":
+            return False
+        instance = self._usb_instance_id(getattr(self.adapter, "resource_name", ""))
+        if not instance:
+            return False   # not connected over USB — nothing to reset
+        log.warning("Re-opening the session didn't help — re-enumerating the USB "
+                    "device (software replug).")
+        try:
+            proc = subprocess.run(["pnputil", "/restart-device", instance],
+                                  capture_output=True, text=True, timeout=30)
+        except Exception as exc:   # noqa: BLE001 - pnputil missing, timeout, ...
+            log.warning(f"USB re-enumeration could not run: {exc}")
+            return False
+        if proc.returncode == 0:
+            log.info(f"USB device re-enumerated ({instance}).")
+            time.sleep(USB_RESET_SETTLE_S)   # let Windows finish enumeration
+            return True
+        detail = (proc.stdout or proc.stderr or "").strip()[:200]
+        log.warning(f"USB re-enumeration refused (pnputil exit {proc.returncode}) — "
+                    f"this usually needs the program to run as Administrator. {detail}")
+        return False
 
     def set_reference_mode(self, mode: int = 0):
         """Set the instrument in Single, Dual or harmonic mode.

@@ -1160,6 +1160,98 @@ def test_lockin_reconnect_clears_device_to_unwedge_link():
     assert cleared["n"] == 1, "reconnect must clear the device to flush a wedged link"
 
 
+def test_usb_instance_id_derived_from_visa_resource():
+    """The bus-level USB reset targets only the lock-in, via the Windows device
+    instance ID derived from the VISA resource string."""
+    from src.classes.ametek7270_class import Ametek7270
+
+    assert (Ametek7270._usb_instance_id("USB0::0x0A2D::0x001B::15342534::RAW")
+            == "USB\\VID_0A2D&PID_001B\\15342534")
+    # Non-USB resources (e.g. the 7270's Ethernet interface) have nothing to reset.
+    assert Ametek7270._usb_instance_id("TCPIP0::192.168.0.20::50000::SOCKET") is None
+    assert Ametek7270._usb_instance_id("") is None
+    assert Ametek7270._usb_instance_id("USB0::garbage::0x001B::1::RAW") is None
+
+
+def test_lockin_usb_reset_escalation_after_session_recovery_fails():
+    """When session re-open + device clear keeps failing (the hard-hung interface
+    seen in the field: 'reconnected (device cleared)' yet still unreachable), the
+    retry ladder must escalate to a bus-level USB reset (software replug) from
+    attempt USB_RESET_FROM_ATTEMPT on."""
+    import src.classes.ametek7270_class as am
+
+    dsp = am.Ametek7270.__new__(am.Ametek7270)
+    state = {"up": False, "opens": 0, "resets": 0}
+
+    class FakeConn:
+        read_termination = write_termination = "\x00"
+        timeout = 2000
+        def close(self): pass
+        def clear(self): pass
+
+    class FakeManager:
+        def open_resource(self, resource, **kw):
+            state["opens"] += 1
+            if state["opens"] >= 4:     # only the 4th re-open brings it back
+                state["up"] = True
+            return FakeConn()
+
+    class FakeAdapter:
+        resource_name = "USB0::0x0A2D::0x001B::15342534::RAW"
+        manager = FakeManager()
+        connection = FakeConn()
+
+    dsp.adapter = FakeAdapter()
+    dsp._reset_usb_device = lambda: state.__setitem__("resets", state["resets"] + 1)
+
+    def fake_write(command, **kw):
+        if not state["up"]:
+            raise RuntimeError("interface hung")
+    def fake_read(**kw):
+        if not state["up"]:
+            raise RuntimeError("interface hung")
+        return "0.7"
+    dsp.write = fake_write
+    dsp.read = fake_read
+    dsp.wait_for = lambda *a, **k: None
+
+    settle = am.RECONNECT_SETTLE_S
+    am.RECONNECT_SETTLE_S = 0.0          # keep the test fast
+    try:
+        assert dsp.ask("MAG.") == "0.7"
+    finally:
+        am.RECONNECT_SETTLE_S = settle
+
+    # Attempts 1-2: session-level only.  Attempts 3-4: bus reset first.
+    assert state["resets"] == 2, f"expected bus resets on attempts 3 and 4, got {state['resets']}"
+    assert state["opens"] == 4
+
+
+def test_lockin_resource_configurable_via_instruments_config():
+    """The lock-in VISA resource must be overridable from
+    configs/instruments_config.ini (e.g. to switch the 7270 to Ethernet)
+    without touching the code."""
+    import os
+    import tempfile
+    from src.classes import _lockin_resource_from_config
+
+    d = tempfile.mkdtemp()
+    ini = os.path.join(d, "instruments_config.ini")
+    with open(ini, "w") as f:
+        f.write("[LockIn]\nresource = TCPIP0::192.168.0.20::50000::SOCKET\n")
+    assert _lockin_resource_from_config(ini) == "TCPIP0::192.168.0.20::50000::SOCKET"
+
+    # Missing file or missing key -> None (driver falls back to its USB default).
+    assert _lockin_resource_from_config(os.path.join(d, "nope.ini")) is None
+    with open(ini, "w") as f:
+        f.write("[LockIn]\n")
+    assert _lockin_resource_from_config(ini) is None
+
+    # And the shipped config file exists and parses to *some* resource.
+    shipped = os.path.join(_REPO, "configs", "instruments_config.ini")
+    assert _lockin_resource_from_config(shipped), "shipped instruments_config.ini must define a resource"
+
+
 def test_failed_run_resets_controls_and_archives_like_finished():
     """pymeasure emits `failed` (never `finished`) when a worker crashes.  The
     window must handle it like a finished run — reset the controls and archive —

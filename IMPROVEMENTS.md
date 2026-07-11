@@ -6,6 +6,23 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Bus-level USB reset when the lock-in interface hard-hangs; Ethernet as a
+  config option.** The 2026-07-11 overnight crash showed the limit of
+  session-level recovery: after the device clear the *write* went through but
+  the instrument never answered (read timeout), and it stayed dead for 10 hours
+  — with USB power management already disabled, that points at a hard interface
+  hang (EMI from the coil switching, or the 7270's USB firmware). Two additions:
+  (1) from reconnect attempt 3 on, the retry ladder re-enumerates the USB device
+  with `pnputil /restart-device <instance-from-VISA-resource>` — the software
+  equivalent of replugging the cable, which forces the instrument to
+  re-initialise its USB stack. Windows-only, touches only the 7270, and needs
+  the program to run as Administrator (logged clearly when refused). When all
+  recovery fails, the log now says exactly what to do (power-cycle / replug /
+  consider Ethernet). (2) The lock-in VISA resource is now read from
+  `configs/instruments_config.ini`, so the 7270 can be switched to its
+  **Ethernet interface** (`TCPIP0::<ip>::50000::SOCKET`, same null-terminated
+  protocol) with a one-line config edit — Ethernet sidesteps the whole USB
+  hang/EMI class of problem.
 - **A crashed run now resets the window and archives its partial data.** pymeasure
   emits `failed` (never `finished`) when a worker crashes, but the window only
   connected `finished` — so after an overnight crash the Abort button stayed

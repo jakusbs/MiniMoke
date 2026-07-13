@@ -26,6 +26,7 @@ from pymeasure.instruments import Instrument
 from pymeasure.instruments.validators import modular_range, truncated_discrete_set, truncated_range, strict_range
 
 import sys
+import math
 import time
 import subprocess
 import logging
@@ -425,6 +426,21 @@ class Ametek7270(Instrument):
                     f"this usually needs the program to run as Administrator. {detail}")
         return False
 
+    def read_xy_rt(self):
+        """Read one demodulator snapshot as ``(x, y, r, theta_deg)`` in a
+        SINGLE transaction.
+
+        Uses the instrument's batch query ``XY.`` (both components of one
+        sample) and derives R and theta from it — exactly what the 7270's
+        ``MAG.``/``PHA.`` outputs are internally.  Compared to reading
+        ``x``/``y``/``mag``/``theta`` separately this is one USB/LAN round-trip
+        per point instead of four (four times fewer chances for a link glitch
+        mid-sweep) and all four values describe the *same* instant instead of
+        four slightly different ones.
+        """
+        x, y = self.xy
+        return x, y, math.hypot(x, y), math.degrees(math.atan2(y, x))
+
     def set_reference_mode(self, mode: int = 0):
         """Set the instrument in Single, Dual or harmonic mode.
 
@@ -508,7 +524,8 @@ class OfflineLockin:
 
     # Measurement reads — always 0.0 when offline.
     x = y = x1 = y1 = x2 = y2 = 0.0
-    mag = mag1 = theta = theta1 = xy = 0.0
+    mag = mag1 = theta = theta1 = 0.0
+    xy = (0.0, 0.0)
     adc1 = adc2 = adc3 = adc4 = 0.0
     auto_gain = False
 
@@ -527,6 +544,12 @@ class OfflineLockin:
     # Command/configuration helpers — all no-ops returning empty/neutral values.
     def ask(self, command, query_delay=0):
         return ""
+
+    def read_xy_rt(self):
+        # Mirror the real driver's semantics (R/theta derived from x/y) so
+        # tests can steer the values through the .x/.y attributes.
+        x, y = float(self.x), float(self.y)
+        return x, y, math.hypot(x, y), math.degrees(math.atan2(y, x))
 
     def reconnect(self):
         pass

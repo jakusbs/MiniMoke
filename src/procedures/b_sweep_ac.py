@@ -309,12 +309,10 @@ class B_Sweep_Lockin(Procedure):
         # so the lock-in reads happen in parallel with the DAC sampling window.
         dac.start_tasks()
 
-        # Read the lock-in's demodulated outputs (X./Y./MAG./PHA.) — single
-        # reference mode, set in startup() — the same reads the X/Y/XY sweeps use.
-        lockin_x     = meas.x
-        lockin_y     = meas.y
-        lockin_r     = meas.mag
-        lockin_theta = meas.theta
+        # Read the lock-in's demodulated outputs in ONE transaction ('XY.',
+        # R/theta derived from the same sample) — single reference mode, set in
+        # startup() — the same batched read the X/Y/XY sweeps use.
+        lockin_x, lockin_y, lockin_r, lockin_theta = meas.read_xy_rt()
 
         # Wait for DAC acquisition to finish and collect ADC data
         balanced_data, intensity_data = dac.read_data()

@@ -6,6 +6,17 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Batched lock-in readout: one transaction per point instead of four.** Every
+  measured point used to issue four separate queries (`X.`, `Y.`, `MAG.`,
+  `PHA.`) — four USB round-trips, four chances per point for the link to glitch
+  (the 2026-07-11 crash died on `MAG.`, the third of the burst). All procedures
+  now read one `XY.` batch query and derive R/θ from that same sample — which is
+  exactly what the instrument's `MAG.`/`PHA.` outputs are internally, with the
+  bonus that all four recorded values now describe the *same* instant rather
+  than four slightly different ones. Columns and their meaning are unchanged.
+  (The deeper batching — arming the 7270's internal curve buffer and streaming
+  it out at the end of a sweep — remains a future idea; it doesn't fit the
+  per-point DAC acquisition windows.)
 - **Bus-level USB reset when the lock-in interface hard-hangs; Ethernet as a
   config option.** The 2026-07-11 overnight crash showed the limit of
   session-level recovery: after the device clear the *write* went through but
@@ -154,6 +165,8 @@ lost.
   slow measurements rather than always on.
 - **Per-point error handling.** Record `NaN` and continue on a transient
   instrument read error instead of aborting the whole sweep.
-- **Faster lock-in readout.** Reading `x1,y1,mag1,theta1` is four VISA queries
-  per point; the 7270 can return several values per command, or its internal
-  curve buffer can be armed once and dumped at the end of a sweep.
+- **Streaming lock-in readout (curve buffer).** The per-point readout is now a
+  single `XY.` transaction (see Done); the remaining idea is arming the 7270's
+  internal curve buffer once and dumping it at the end of a sweep — only worth
+  it if the per-point DAC acquisition window is ever replaced by a streamed
+  acquisition.

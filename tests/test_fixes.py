@@ -324,7 +324,7 @@ def test_b_sweep_lockin_uses_lockin_oscillator_not_chopper_or_dac():
     fakes["dac"].setup_aquisition = lambda **k: dac_cfg.update(k)
     # Distinct values so single-reference reads (x) are told apart from dual (x1).
     fakes["meas"].x, fakes["meas"].y = 1.0, 2.0
-    fakes["meas"].mag, fakes["meas"].theta = 3.0, 4.0
+    fakes["meas"].mag = -55.0    # separate MAG. read must NOT be used (batched readout)
     fakes["meas"].x1 = -99.0     # dual-harmonic read must NOT be used
 
     p = bsl.B_Sweep_Lockin()
@@ -353,7 +353,9 @@ def test_b_sweep_lockin_uses_lockin_oscillator_not_chopper_or_dac():
     live = [r for r in records if not np.isnan(r["Voltage X 1f (V)"])]
     assert live, "no live lock-in points emitted"
     assert live[0]["Voltage X 1f (V)"] == 1.0      # from meas.x, not meas.x1
-    assert live[0]["Voltage R 1f (V)"] == 3.0
+    # R is derived from the same batched X/Y sample, never read separately.
+    import math as _math
+    assert live[0]["Voltage R 1f (V)"] == _math.hypot(1.0, 2.0)
     # The averaged loop carries the signed X average (the physical hysteresis loop).
     avg = [r for r in records if not np.isnan(r["Voltage X Average (V)"])]
     assert avg and avg[0]["Voltage X Average (V)"] == 1.0
@@ -1250,6 +1252,38 @@ def test_lockin_resource_configurable_via_instruments_config():
     # And the shipped config file exists and parses to *some* resource.
     shipped = os.path.join(_REPO, "configs", "instruments_config.ini")
     assert _lockin_resource_from_config(shipped), "shipped instruments_config.ini must define a resource"
+
+
+def test_lockin_readout_batched_single_transaction_per_point():
+    """A per-point lock-in read must be ONE instrument transaction (the 7270's
+    'XY.' batch query), with R and theta derived from that same sample — not
+    four separate queries (X./Y./MAG./PHA.), which quadruples the exposure to
+    USB link glitches mid-sweep."""
+    import math
+    from src.classes.ametek7270_class import Ametek7270
+
+    dsp = Ametek7270.__new__(Ametek7270)
+    commands = []
+    dsp.write = lambda command, **kw: commands.append(command)
+    dsp.read = lambda **kw: "3.0,4.0"
+    dsp.wait_for = lambda *a, **k: None
+
+    x, y, r, theta = dsp.read_xy_rt()
+    assert (x, y) == (3.0, 4.0)
+    assert r == 5.0                                    # sqrt(3^2 + 4^2)
+    assert abs(theta - math.degrees(math.atan2(4.0, 3.0))) < 1e-12
+    assert commands == ["XY."], f"expected exactly one batched query, got {commands}"
+
+    # And the shared read_signals uses the batch: R/theta in the emitted data
+    # follow from the X/Y pair.
+    import src.procedures.position_sweep as ps
+    fakes = _patch_proc_module(ps)
+    fakes["meas"].x, fakes["meas"].y = 3.0, 4.0
+    data = ps.read_signals(0.1)
+    assert data['Voltage X 1f (V)'] == 3.0
+    assert data['Voltage Y 1f (V)'] == 4.0
+    assert data['Voltage R 1f (V)'] == 5.0
+    assert abs(data['Voltage theta 1f (V)'] - math.degrees(math.atan2(4.0, 3.0))) < 1e-12
 
 
 def test_failed_run_resets_controls_and_archives_like_finished():

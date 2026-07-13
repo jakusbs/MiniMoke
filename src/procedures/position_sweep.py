@@ -49,13 +49,17 @@ def read_signals(field_A) -> dict:
     # Keep the Live tab cards updating from this running measurement.
     live_readout.push(balanced_diodes_DC, intensity_DC, B_measurement)
 
+    # One lock-in transaction per point ('XY.'); R/theta derived from the same
+    # sample — instead of four separate queries (X./Y./MAG./PHA.).
+    lockin_x, lockin_y, lockin_r, lockin_theta = meas.read_xy_rt()
+
     return {
         'Magnetic Field (A)':   field_A,
         'Magnetic Field (T)':   B_measurement / 1000.0,
-        'Voltage X 1f (V)':     meas.x,
-        'Voltage Y 1f (V)':     meas.y,
-        'Voltage R 1f (V)':     meas.mag,
-        'Voltage theta 1f (V)': meas.theta,
+        'Voltage X 1f (V)':     lockin_x,
+        'Voltage Y 1f (V)':     lockin_y,
+        'Voltage R 1f (V)':     lockin_r,
+        'Voltage theta 1f (V)': lockin_theta,
         'Voltage DC (V)':       balanced_diodes_DC,
         'Voltage DC STD (V)':   np.std(balanced_diodes_data),
         'Intensity (V)':        intensity_DC,

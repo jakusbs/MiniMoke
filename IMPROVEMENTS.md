@@ -27,7 +27,12 @@ lost.
   with `pnputil /restart-device <instance-from-VISA-resource>` — the software
   equivalent of replugging the cable, which forces the instrument to
   re-initialise its USB stack. Windows-only, touches only the 7270, and needs
-  the program to run as Administrator (logged clearly when refused). When all
+  the program to run as Administrator (logged clearly when refused). Field
+  evidence supports this route: PC restarts (which bus-reset every USB device at
+  boot, without ever cutting the self-powered instrument's power) have revived
+  the link — but sometimes only after several restarts, so the ladder attempts
+  up to four targeted resets (six reconnect attempts total, ~2–3 min worst case
+  before the run is declared failed). When all
   recovery fails, the log now says exactly what to do (power-cycle / replug /
   consider Ethernet). (2) The lock-in VISA resource is now read from
   `configs/instruments_config.ini`, so the 7270 can be switched to its

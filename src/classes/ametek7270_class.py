@@ -38,12 +38,14 @@ log.addHandler(logging.NullHandler())
 # each re-open.  The wait grows with the attempt number (1x, 2x, 3x ...) so a
 # power-suspended USB device, which can take several seconds to actually resume,
 # gets progressively more time before the retry.
-RECONNECT_ATTEMPTS = 4
+RECONNECT_ATTEMPTS = 6
 RECONNECT_SETTLE_S = 1.0
 # From this attempt on, escalate to a bus-level USB re-enumeration (the software
 # equivalent of unplugging and replugging the cable) before re-opening the
 # session — a hard-hung instrument interface ignores session re-opens and device
-# clears but re-initialises its USB stack on a bus reset.
+# clears but re-initialises its USB stack on a bus reset.  Field experience
+# ("a few PC restarts fixed it" — each boot bus-resets every USB device) shows
+# one reset is not always enough, hence up to four targeted resets here.
 USB_RESET_FROM_ATTEMPT = 3
 USB_RESET_SETTLE_S     = 5.0   # give Windows time to re-enumerate the device
 
@@ -324,9 +326,9 @@ class Ametek7270(Instrument):
         log.error(
             "Lock-in did not respond after re-opening, clearing and resetting the "
             "USB link %d times — its interface looks hard-hung. Power-cycle the "
-            "7270 (or unplug/replug its USB cable). If this keeps happening, "
-            "consider running it over Ethernet instead of USB (see "
-            "configs/instruments_config.ini).", RECONNECT_ATTEMPTS)
+            "7270, or unplug/replug its USB cable (restarting the PC bus-resets "
+            "it too). If this keeps happening, consider running it over Ethernet "
+            "instead of USB (see configs/instruments_config.ini).", RECONNECT_ATTEMPTS)
         raise last_exc
 
     def reconnect(self):

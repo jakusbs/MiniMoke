@@ -79,20 +79,25 @@ subnet masks, and that the 7270 applied its settings (power-cycle it once).
 
 ## 6. Point MiniMOKE at Ethernet
 
-Edit `configs/instruments_config.ini`:
+Create the file `configs/instruments_config.local.ini` (next to
+`instruments_config.ini`) with:
 
 ```ini
 [LockIn]
-# resource = USB0::0x0A2D::0x001B::15342534::RAW
 resource = TCPIP0::192.168.77.2::50000::SOCKET
 ```
+
+Use the **.local** file, not `instruments_config.ini` itself: the local file is
+git-ignored and survives every code update, while the shipped file is
+overwritten by updates (which silently resets the rig back to USB — this
+happened once already).
 
 Start the app and do a short supervised test sweep — check the lock-in values
 look normal. Unplug the USB cable from the 7270 once Ethernet works, so there's
 only one active control path.
 
-Switching back to USB is the same edit in reverse (swap which line is
-commented) plus an app restart.
+To switch back to USB, delete (or comment out) the resource line in the .local
+file and restart the app.
 
 ## 7. If something misbehaves
 

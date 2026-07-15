@@ -1276,6 +1276,23 @@ def test_lockin_resource_configurable_via_instruments_config():
     shipped = os.path.join(_REPO, "configs", "instruments_config.ini")
     assert _lockin_resource_from_config(shipped), "shipped instruments_config.ini must define a resource"
 
+    # The git-ignored LOCAL file wins over the shipped one, so a code update
+    # (which overwrites the shipped file) can never reset the rig's choice —
+    # copying all files over did exactly that once, silently reverting the rig
+    # from Ethernet back to USB.
+    with open(ini, "w") as f:
+        f.write("[LockIn]\nresource = USB0::0x0A2D::0x001B::15342534::RAW\n")
+    local = os.path.join(d, "instruments_config.local.ini")
+    with open(local, "w") as f:
+        f.write("[LockIn]\nresource = TCPIP0::192.168.77.2::50000::SOCKET\n")
+    assert (_lockin_resource_from_config(ini, local_path=local)
+            == "TCPIP0::192.168.77.2::50000::SOCKET"), "local override must win"
+    # Local file present but without the key -> shipped value applies.
+    with open(local, "w") as f:
+        f.write("[LockIn]\n")
+    assert (_lockin_resource_from_config(ini, local_path=local)
+            == "USB0::0x0A2D::0x001B::15342534::RAW")
+
 
 def test_lockin_readout_batched_single_transaction_per_point():
     """A per-point lock-in read must be ONE instrument transaction (the 7270's

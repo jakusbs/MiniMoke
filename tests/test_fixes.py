@@ -616,6 +616,29 @@ def test_separated_curve_passes_connect_from_loop_column():
     assert run(pd.DataFrame({"X": [0, 1], "Y": [1, 2]})) == "MISSING"
 
 
+def test_curve_with_missing_axis_column_draws_empty_instead_of_keyerror():
+    """The axis menus offer the union of all procedures' columns, so a curve may
+    be asked for a column its procedure never records (reported: switching the
+    y-axis to 'Voltage X Average (V)' with a Y-sweep curve loaded raised
+    KeyError).  The curve must clear itself instead of raising."""
+    import pandas as pd
+    import pyqtgraph as pg
+    from src.ui.separated_plot import SeparatedResultsCurve
+
+    class FakeResults:
+        def __init__(self, df):
+            self.data = df
+
+    df = pd.DataFrame({"X": [0, 1], "Y": [1, 2]})       # no 'Voltage X Average (V)'
+    curve = SeparatedResultsCurve(FakeResults(df), x="X", y="Voltage X Average (V)",
+                                  pen=pg.mkPen("r"))
+    curve.force_reload = False
+    captured = {}
+    curve.setData = lambda *a, **k: captured.update(args=a)
+    curve.update_data()                                  # must not raise
+    assert captured.get("args") == ([], []), "curve must be cleared when the column is absent"
+
+
 def test_xy_sweep_progress_monotonic_and_bounded():
     """XY progress must rise monotonically and never exceed 100 %."""
     import src.procedures.position_sweep as ps

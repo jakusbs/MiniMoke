@@ -41,6 +41,14 @@ class SeparatedResultsCurve(ResultsCurve):
         if self.force_reload:
             self.results.reload()
         data = self.results.data
+        # The plot's axis menus offer the union of every procedure's columns, so
+        # a selected axis can name a column this curve's procedure never records
+        # (e.g. 'Voltage X Average (V)' while a Y-sweep curve is shown).  Such a
+        # curve simply has nothing to draw — clear it instead of raising
+        # KeyError out of the axis-change handler.
+        if self.x not in data or self.y not in data:
+            self.setData([], [])
+            return
         xdata = data[self.x]
         ydata = data[self.y]
         try:

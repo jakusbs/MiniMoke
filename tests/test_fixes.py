@@ -1453,6 +1453,37 @@ def test_lockin_revive_tries_second_command_port_when_socket_refused():
             m.meas, m.dsp = mm, md
 
 
+def test_settle_time_waits_after_each_move():
+    """settle_time must pause between a stage move and the acquisition (letting
+    vibrations die out and the lock-in output settle), and stay silent at 0."""
+    import time as _time
+    import src.procedures.position_sweep as ps
+    import src.procedures.y_sweep_proc as yp
+
+    def run(settle):
+        _patch_proc_module(ps)
+        p = yp.Y_Sweep()
+        p.set_sample_name("t")
+        p.y_min, p.y_max, p.y_step = 0.0, 2.0, 1.0      # 3 points
+        p.x, p.b, p.repeat_num, p.acq_time = 0.0, 0.0, 1, 0.001
+        p.settle_time = settle
+        p.emit = lambda *a, **k: None
+        p.should_stop = lambda: False
+        sleeps = []
+        saved = _time.sleep
+        _time.sleep = lambda s: sleeps.append(s)
+        try:
+            p.startup()      # b=0 -> startup itself sleeps nowhere
+            p.execute()
+        finally:
+            _time.sleep = saved
+        return sleeps
+
+    # 2 loops x 3 y-points; the first point is already at home -> 5 moves.
+    assert run(0.25) == [0.25] * 5
+    assert run(0.0) == [], "settle_time=0 must add no waits"
+
+
 def test_run_warns_loudly_when_lockin_is_offline():
     """If the app fell back to the OfflineLockin stub (lock-in unreachable at
     launch), a run 'works' but records exact zeros for every lock-in channel.

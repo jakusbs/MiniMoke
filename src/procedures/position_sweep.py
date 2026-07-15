@@ -227,12 +227,22 @@ class PositionSweep(Procedure):
             if item != last_item:
                 dac.coils_output = item
                 last_item = item
+            moved = False
             if xt != last_x:
                 move_x_um(xt)
                 last_x = xt
+                moved = True
             if yt != last_y:
                 move_y_um(yt)
                 last_y = yt
+                moved = True
+
+            # Optional pause between the move and the acquisition, so stage
+            # vibrations die out and the lock-in output (time constant) settles
+            # at the new spot before the integration window opens.
+            settle = float(getattr(self, "settle_time", 0.0) or 0.0)
+            if moved and settle > 0:
+                time.sleep(settle)
 
             data = self._measure_point(item, iteration)
             data['Loop'] = loop

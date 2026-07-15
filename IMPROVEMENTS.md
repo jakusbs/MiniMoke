@@ -6,6 +6,14 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Acquisition windows longer than 10 s no longer time out; per-point settle
+  time.** nidaqmx defaults every `wait_until_done`/`read` timeout to 10 s, so an
+  integration (acquisition) time above 10 s crashed the point — the DAC now
+  passes `acquisition_time + 10 s` to the driver instead. And the position
+  sweeps (X/Y/XY) gained a **"Settle time after move"** parameter (default 0 —
+  no behaviour change): an optional pause between the stage move and the
+  acquisition, so vibrations die out and the lock-in output (time constant)
+  settles at the new spot before the integration window opens.
 - **Lock-in "Ethernet refresh": auto-revive at run start, spare-port fallback,
   clean disconnect on exit.** The 7270 accepts one Ethernet client per port; a
   crashed session can leave its dead connection occupying port 50000, and the

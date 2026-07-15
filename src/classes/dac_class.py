@@ -219,11 +219,16 @@ class DAC:
             np_points = round(self.sampling_rate * self.acquisition_time) + 1
             return np.full(np_points, 0.), np.full(np_points, 0.)
 
-        self.output.wait_until_done()
-        self.input.wait_until_done()
+        # nidaqmx defaults every wait/read timeout to 10 s, so an acquisition
+        # window longer than that used to time out mid-measurement.  Give the
+        # driver the actual window length plus a generous margin instead.
+        timeout = float(self.acquisition_time) + 10.0
+        self.output.wait_until_done(timeout=timeout)
+        self.input.wait_until_done(timeout=timeout)
 
         n_read = len(self.reference_signal_1f[0]) + 1
-        data_ai0, data_ai1 = self.input.read(number_of_samples_per_channel=n_read)
+        data_ai0, data_ai1 = self.input.read(number_of_samples_per_channel=n_read,
+                                             timeout=timeout)
 
         # Strip the trailing RMS-hold sample
         data_ai0.pop()
@@ -241,8 +246,9 @@ class DAC:
             return
 
         try:
-            self.output.wait_until_done()
-            self.input.wait_until_done()
+            timeout = float(getattr(self, "acquisition_time", 0.5)) + 10.0
+            self.output.wait_until_done(timeout=timeout)
+            self.input.wait_until_done(timeout=timeout)
         except Exception:
             pass
 

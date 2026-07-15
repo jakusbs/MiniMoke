@@ -45,6 +45,7 @@ class Y_Sweep(PositionSweep):
     time_const = FloatParameter('Lockin time constant',   units='s',   default=section.get("time_const", 0.5),    minimum=0.1,  maximum=10)
     phase      = FloatParameter('Lockin phase',           units='deg', default=section.get("phase", 0),           minimum=-180, maximum=180)
     acq_time   = FloatParameter('Aquisition time',        units='s',   default=section.get("acq_time", 1),        minimum=1e-6)
+    settle_time= FloatParameter('Settle time after move', units='s',   default=section.get("settle_time", 0.0),   minimum=0,    maximum=60)
     y_min      = FloatParameter('From y',                 units='um',  default=section.get("y_min", 0))
     y_max      = FloatParameter('To y',                   units='um',  default=section.get("y_max", 100))
     y_step     = FloatParameter('Step',                   units='um',  default=section.get("y_step", 10))

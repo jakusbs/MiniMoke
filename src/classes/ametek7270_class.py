@@ -48,6 +48,13 @@ RECONNECT_SETTLE_S = 1.0
 # one reset is not always enough, hence up to four targeted resets here.
 USB_RESET_FROM_ATTEMPT = 3
 USB_RESET_SETTLE_S     = 5.0   # give Windows time to re-enumerate the device
+# Protocol-sync probe (run at connect and after each reconnect): short read
+# timeout used while flushing stale responses and counting how many chunks the
+# interface returns per command (USB: 1; the Ethernet socket appends an extra
+# status-prompt chunk).  Caps keep a babbling link from spinning forever.
+PROTOCOL_PROBE_TIMEOUT_MS = 500
+PROTOCOL_FLUSH_MAX        = 32
+PROTOCOL_PROBE_CHUNK_MAX  = 4
 
 
 def check_read_not_empty(value):
@@ -74,6 +81,12 @@ class Ametek7270(Instrument):
     # is available.  A successfully constructed instrument is enabled; the
     # OfflineLockin fallback (below) reports False.
     enabled = True
+
+    # How many extra response chunks the connected interface sends per command
+    # beyond the data chunk: 0 on USB; 1 on the Ethernet socket, which appends a
+    # status-prompt chunk.  Calibrated by _sync_protocol(); left unread, those
+    # chunks shift every later read by one and desynchronise the whole protocol.
+    _extra_response_chunks = 0
 
     SENSITIVITIES = [
         0.0, 2.0e-9, 5.0e-9, 10.0e-9, 20.0e-9, 50.0e-9, 100.0e-9,
@@ -273,6 +286,74 @@ class Ametek7270(Instrument):
             write_termination=write_termination,
             **kwargs)
 
+        # Learn the connected interface's response framing (and flush any
+        # backlog a previously crashed session left unread).  Never fatal: a
+        # failed probe just leaves the USB default of one chunk per response.
+        try:
+            self._sync_protocol()
+        except Exception as exc:   # noqa: BLE001
+            log.warning(f"Lock-in protocol sync at connect failed: {exc}")
+
+    def _sync_protocol(self):
+        """Flush stale responses and calibrate the per-command response framing.
+
+        The 7270 answers every command with a null-terminated data chunk; its
+        Ethernet socket interface *additionally* appends a status-prompt chunk
+        that the USB interface does not send.  If that extra chunk is never
+        read, every subsequent read is shifted by one response — property sets
+        start reporting 'Incorrect return from previously set property' on
+        alternating commands and queries return empty/foreign data (observed on
+        the first Ethernet run, 2026-07-15).
+
+        With a short read timeout this: (1) drains anything already queued —
+        stale responses from a crashed run or session; (2) sends one ``ID``
+        probe and counts the chunks it returns.  Chunks beyond the first are
+        per-command overhead, recorded in ``_extra_response_chunks`` so
+        :meth:`ask`/:meth:`check_set_errors` can drain them after every
+        transaction.  Called at connect and after every :meth:`reconnect`.
+        """
+        conn = getattr(self.adapter, "connection", None)
+        if conn is None:
+            return
+        old_timeout = getattr(conn, "timeout", None)
+        try:
+            conn.timeout = PROTOCOL_PROBE_TIMEOUT_MS
+            flushed = 0
+            while flushed < PROTOCOL_FLUSH_MAX:
+                try:
+                    self.read()
+                    flushed += 1
+                except Exception:   # noqa: BLE001 - timeout = queue is empty
+                    break
+            self.write("ID")
+            chunks = 0
+            while chunks < PROTOCOL_PROBE_CHUNK_MAX:
+                try:
+                    self.read()
+                    chunks += 1
+                except Exception:   # noqa: BLE001 - timeout = no more chunks
+                    break
+            self._extra_response_chunks = max(chunks - 1, 0)
+            if flushed:
+                log.info(f"Lock-in link: flushed {flushed} stale response(s).")
+            if self._extra_response_chunks:
+                log.info(f"Lock-in interface sends {self._extra_response_chunks} extra "
+                         f"status chunk(s) per response (Ethernet socket framing) — "
+                         f"they will be drained after every command.")
+        finally:
+            if old_timeout is not None:
+                try:
+                    conn.timeout = old_timeout
+                except Exception:   # noqa: BLE001
+                    pass
+
+    def _drain_status_chunks(self):
+        """Consume the interface's extra per-response chunk(s), if any."""
+        for _ in range(self._extra_response_chunks):
+            try:
+                self.read()
+            except Exception:   # noqa: BLE001 - a missing chunk must not fail the read
+                break
 
     def check_set_errors(self):
         """mandatory to be used for property setter
@@ -281,7 +362,9 @@ class Ametek7270(Instrument):
         has been correctly set. With default termination character set as Null character,
         this turns out as an empty string to be read.
         """
-        if self.read() == '':
+        response = self.read()
+        self._drain_status_chunks()
+        if response == '':
             return []
         else:
             return ['Incorrect return from previously set property']
@@ -297,10 +380,10 @@ class Ametek7270(Instrument):
         ``ask`` — so this single guard covers per-point reads and commands alike.
         """
         try:
-            return super().ask(command, query_delay).strip()
+            return self._ask_once(command, query_delay)
         except Exception as exc:   # noqa: BLE001 - any VISA/USB I/O failure
             log.warning(f"Lock-in I/O error on '{command}' ({exc}); "
-                        f"re-opening the USB link and retrying.")
+                        f"re-opening the link and retrying.")
 
         # A dropped or power-suspended USB link can need a moment — and more than
         # one attempt — to come back, so reconnect and retry a few times before
@@ -315,7 +398,7 @@ class Ametek7270(Instrument):
             self.reconnect()
             time.sleep(RECONNECT_SETTLE_S * attempt)   # progressively longer for a slow-to-resume device
             try:
-                result = super().ask(command, query_delay).strip()
+                result = self._ask_once(command, query_delay)
                 if attempt > 1:
                     log.info(f"Lock-in link recovered after {attempt} reconnect attempts.")
                 return result
@@ -330,6 +413,13 @@ class Ametek7270(Instrument):
             "it too). If this keeps happening, consider running it over Ethernet "
             "instead of USB (see configs/instruments_config.ini).", RECONNECT_ATTEMPTS)
         raise last_exc
+
+    def _ask_once(self, command, query_delay=0):
+        """One write+read transaction, then drain the interface's extra status
+        chunk(s) (Ethernet socket framing) so the response stream stays aligned."""
+        result = super().ask(command, query_delay).strip()
+        self._drain_status_chunks()
+        return result
 
     def reconnect(self):
         """Re-open the VISA session *and clear the device* to recover a dropped,
@@ -373,6 +463,12 @@ class Ametek7270(Instrument):
             except Exception as exc:   # noqa: BLE001 - not every backend implements clear()
                 log.debug(f"Lock-in device clear skipped: {exc}")
             self.adapter.connection = new_conn
+            # Re-learn the framing and flush whatever the interrupted command
+            # left queued, so the fresh session starts response-aligned.
+            try:
+                self._sync_protocol()
+            except Exception:   # noqa: BLE001
+                pass
             log.info("Lock-in VISA session reconnected (device cleared).")
         except Exception as exc:   # noqa: BLE001 - never let recovery itself crash
             log.warning(f"Lock-in reconnect failed: {exc}")
@@ -552,6 +648,11 @@ class OfflineLockin:
         # tests can steer the values through the .x/.y attributes.
         x, y = float(self.x), float(self.y)
         return x, y, math.hypot(x, y), math.degrees(math.atan2(y, x))
+
+    _extra_response_chunks = 0
+
+    def _sync_protocol(self):
+        pass
 
     def reconnect(self):
         pass

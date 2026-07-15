@@ -98,9 +98,11 @@ commented) plus an app restart.
 
 - **App starts with "Lock-in (Ametek 7270) not found"** — the socket didn't
   open: redo step 5.
-- **First query times out or returns garbage** — save the log and report it;
-  this would be a response-framing detail on the socket interface and is a
-  one-line fix in the driver.
+- **"Incorrect return from previously set property" on alternating commands,
+  or an XY-read crash right at the first point** — you are running a version
+  older than 2026-07-15. The socket interface appends a status-prompt chunk to
+  every response that USB doesn't send; the driver now probes the framing at
+  connect and drains the extra chunk automatically. `git pull` and restart.
 - The auto-recovery ladder still applies over Ethernet (session re-open +
   retry); the USB-replug step skips itself automatically since there is no USB
   device to reset.

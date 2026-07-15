@@ -6,6 +6,19 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Ethernet socket framing auto-sync (and stale-response flush).** The first
+  Ethernet run (2026-07-15) desynchronised immediately: the 7270's socket
+  interface appends a status-prompt chunk to every response that its USB
+  interface doesn't send. Unread, each command left one chunk behind, shifting
+  all later reads — property sets failed with "Incorrect return from previously
+  set property" on alternating commands, and the first `XY.` read got an empty
+  string (run 1) / a single foreign token (run 2). The driver now runs
+  `_sync_protocol()` at connect and after every reconnect: with a short read
+  timeout it flushes any queued backlog (also covers stale responses a crashed
+  run leaves behind on USB), sends one `ID` probe, counts the response chunks,
+  and thereafter drains the extra chunk(s) after every transaction (`ask` and
+  `check_set_errors`). USB behaviour is unchanged (probe finds one chunk); the
+  socket interface stays response-aligned indefinitely.
 - **Batched lock-in readout: one transaction per point instead of four.** Every
   measured point used to issue four separate queries (`X.`, `Y.`, `MAG.`,
   `PHA.`) — four USB round-trips, four chances per point for the link to glitch

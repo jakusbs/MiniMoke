@@ -1286,6 +1286,60 @@ def test_lockin_readout_batched_single_transaction_per_point():
     assert abs(data['Voltage theta 1f (V)'] - math.degrees(math.atan2(4.0, 3.0))) < 1e-12
 
 
+def test_lockin_stays_in_sync_on_socket_interface_with_status_prompts():
+    """The 7270's Ethernet socket appends an extra status-prompt chunk to every
+    response (USB doesn't).  Unread, those chunks shift all later reads by one —
+    the 2026-07-15 first Ethernet run: 'Incorrect return from previously set
+    property' on alternating set commands, then XY. reading an empty string
+    (run 1) or a single foreign token (run 2).  _sync_protocol must flush stale
+    backlog, learn the framing, and ask/check_set_errors must drain the extra
+    chunk so multi-command sequences stay aligned."""
+    import math
+    import src.classes.ametek7270_class as am
+
+    dsp = am.Ametek7270.__new__(am.Ametek7270)
+
+    # Fake 7270-over-socket: every command answers <data>\0<status>\0; one
+    # stale response is already queued from a previously crashed session.
+    queue = ["4.2E-03"]
+    def fake_write(command, **kw):
+        if command == "XY.":
+            queue.extend(["1.0,2.0", "*"])
+        elif command == "ID":
+            queue.extend(["7270", "*"])
+        else:                                  # a set command: empty ack
+            queue.extend(["", "*"])
+    def fake_read(**kw):
+        if not queue:
+            raise RuntimeError("VI_ERROR_TMO")  # nothing queued -> read times out
+        return queue.pop(0)
+
+    class FakeConn:
+        timeout = 2000
+    class FakeAdapter:
+        resource_name = "TCPIP0::192.168.77.2::50000::SOCKET"
+        connection = FakeConn()
+
+    dsp.adapter = FakeAdapter()
+    dsp.write, dsp.read = fake_write, fake_read
+    dsp.wait_for = lambda *a, **k: None
+
+    dsp._sync_protocol()
+    assert dsp._extra_response_chunks == 1, \
+        "probe must detect the socket's extra status chunk"
+    assert queue == [], "stale backlog must be flushed"
+
+    # A property set stays aligned: empty ack read, status chunk drained.
+    fake_write("OA. 0.3")                      # what the setter's write does
+    assert dsp.check_set_errors() == []
+    assert queue == [], f"leftover chunks would desync the next read: {queue}"
+
+    # The batched point read parses cleanly and leaves the line clean too.
+    x, y, r, theta = dsp.read_xy_rt()
+    assert (x, y, r) == (1.0, 2.0, math.hypot(1.0, 2.0))
+    assert queue == [], "the XY. status chunk must be drained"
+
+
 def test_failed_run_resets_controls_and_archives_like_finished():
     """pymeasure emits `failed` (never `finished`) when a worker crashes.  The
     window must handle it like a finished run — reset the controls and archive —

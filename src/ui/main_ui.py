@@ -839,6 +839,24 @@ class UIWindowBase(QtWidgets.QMainWindow):
                     "failure is kept (and archived) like a finished run.")
         self.finished(experiment)
 
+    def closeEvent(self, event):
+        """Close the lock-in's VISA session before the window goes down.
+
+        The 7270 accepts a single Ethernet client; if the app exits without a
+        clean TCP close, the instrument can keep the dead connection occupied
+        and refuse the next launch until it is power-cycled.  A deliberate
+        close here sends the FIN the instrument needs to free its slot.
+        Best-effort — never blocks the window from closing.
+        """
+        try:
+            import src.classes as devices
+            conn = getattr(getattr(devices.meas, "adapter", None), "connection", None)
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     @property
     def directory(self):
         if not self.directory_input:

@@ -224,6 +224,10 @@ class B_Sweep_Lockin(Procedure):
         # injecting spikes.  Set explicitly so the run never depends on whatever
         # mode the instrument was last left in.
         if not getattr(meas, "enabled", True):
+            from src.classes import try_revive_lockin
+            if try_revive_lockin() is not None:
+                log.info("Lock-in reconnected — continuing this run with the live instrument.")
+        if not getattr(meas, "enabled", True):
             log.warning("Lock-in is OFFLINE (it was not reachable when the app started) — "
                         "the lock-in channels will all be zero! Close the app, make sure the "
                         "lock-in is reachable (power-cycle it if a previous session crashed, "

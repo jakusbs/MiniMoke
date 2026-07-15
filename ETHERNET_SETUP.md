@@ -97,7 +97,11 @@ commented) plus an app restart.
 ## 7. If something misbehaves
 
 - **App starts with "Lock-in (Ametek 7270) not found"** — the socket didn't
-  open: redo step 5.
+  open: redo step 5. You do NOT need to restart the app once the instrument is
+  reachable again: every run start retries the connection automatically (and
+  when port 50000 is refused because a crashed session still holds it, the
+  spare command port 50001 is tried). Closing the app now also disconnects
+  cleanly, so a stale held socket should be rare in the first place.
 - **"Incorrect return from previously set property" on alternating commands,
   or an XY-read crash right at the first point** — you are running a version
   older than 2026-07-15. The socket interface appends a status-prompt chunk to

@@ -67,6 +67,52 @@ meas = _make_lockin()
 # so `dsp` is just an alias used by the configuration calls.
 dsp  = meas
 
+
+def try_revive_lockin():
+    """If the lock-in is the offline stub, try to establish a real connection.
+
+    Called at every AC run start, so a lock-in that was unreachable when the
+    app launched (still booting, or its single Ethernet slot still held by a
+    crashed session) is picked up without restarting the application.
+
+    For a socket resource on the 7270's primary command port (50000) a refused
+    connection is retried on its second command port (50001) — the instrument
+    listens on both, so the spare usually accepts even while a stale connection
+    still occupies the primary.
+
+    On success the new driver replaces the stub everywhere it was imported
+    (``src.classes`` and the procedure modules) and is returned; on failure
+    returns None and the stub stays in place.
+    """
+    global meas, dsp
+    if getattr(meas, "enabled", False):
+        return meas          # already live — nothing to do
+
+    resource = _lockin_resource_from_config()
+    candidates = [resource]
+    if resource and "::SOCKET" in resource.upper() and "::50000::" in resource:
+        candidates.append(resource.replace("::50000::", "::50001::"))
+
+    for res in candidates:
+        try:
+            new = Ametek7270(res) if res else Ametek7270()
+        except Exception as err:
+            log.warning(f"Lock-in reconnect attempt at '{res or 'USB default'}' failed: {err}")
+            continue
+        meas = dsp = new
+        # The procedures imported the object directly, so rebind it there too.
+        # (Imported here, not at module top, to avoid a circular import.)
+        import src.procedures.position_sweep as _ps
+        import src.procedures.b_sweep_ac as _ba
+        import src.procedures.b_sweep_proc as _bp
+        import src.procedures.time_proc as _tp
+        for _mod in (_ps, _ba, _bp, _tp):
+            _mod.meas = new
+            _mod.dsp = new
+        log.info(f"Lock-in connected at '{res or 'USB default'}'.")
+        return new
+    return None
+
 log.setLevel(logging.INFO)
 
 # ── Active stage proxy ────────────────────────────────────────────────────────

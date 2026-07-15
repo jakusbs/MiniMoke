@@ -1363,6 +1363,79 @@ def test_lockin_stays_in_sync_on_socket_interface_with_status_prompts():
     assert queue == [], "the XY. status chunk must be drained"
 
 
+def test_lockin_revive_swaps_offline_stub_everywhere():
+    """try_revive_lockin must replace the offline stub with a live driver in
+    src.classes AND in every procedure module that imported it directly, so a
+    lock-in that was unreachable at app launch is picked up at the next run
+    without restarting the app."""
+    import src.classes as C
+    import src.procedures.position_sweep as ps
+    import src.procedures.b_sweep_ac as ba
+    import src.procedures.b_sweep_proc as bp
+    import src.procedures.time_proc as tp
+    from src.classes.ametek7270_class import OfflineLockin
+
+    class FakeLive:
+        enabled = True
+        def __init__(self, resource=None):
+            self.resource = resource
+
+    mods = (ps, ba, bp, tp)
+    saved = (C.meas, C.dsp, C.Ametek7270) + tuple((m.meas, m.dsp) for m in mods)
+    try:
+        C.meas = C.dsp = OfflineLockin()
+        C.Ametek7270 = FakeLive              # "hardware" is reachable again
+        new = C.try_revive_lockin()
+        assert new is not None and new.enabled
+        assert C.meas is new and C.dsp is new
+        for m in mods:
+            assert m.meas is new and m.dsp is new, f"{m.__name__} still has the stub"
+    finally:
+        C.meas, C.dsp, C.Ametek7270 = saved[0], saved[1], saved[2]
+        for m, (mm, md) in zip(mods, saved[3:]):
+            m.meas, m.dsp = mm, md
+
+
+def test_lockin_revive_tries_second_command_port_when_socket_refused():
+    """The 7270 listens on two command sockets (50000 and 50001).  If the
+    primary refuses (e.g. still held by a crashed session — it accepts one
+    client per port), revive must retry on the spare port so a stale connection
+    doesn't force a power cycle."""
+    import src.classes as C
+    import src.procedures.position_sweep as ps
+    import src.procedures.b_sweep_ac as ba
+    import src.procedures.b_sweep_proc as bp
+    import src.procedures.time_proc as tp
+    from src.classes.ametek7270_class import OfflineLockin
+
+    attempts = []
+    class FakeLive:
+        enabled = True
+        def __init__(self, resource=None):
+            attempts.append(resource)
+            if resource and "::50000::" in resource:
+                raise RuntimeError("connection refused (socket held)")
+            self.resource = resource
+
+    mods = (ps, ba, bp, tp)
+    saved = (C.meas, C.dsp, C.Ametek7270, C._lockin_resource_from_config) \
+            + tuple((m.meas, m.dsp) for m in mods)
+    try:
+        C.meas = C.dsp = OfflineLockin()
+        C.Ametek7270 = FakeLive
+        C._lockin_resource_from_config = \
+            lambda path=None: "TCPIP0::192.168.77.2::50000::SOCKET"
+        new = C.try_revive_lockin()
+        assert new is not None
+        assert new.resource == "TCPIP0::192.168.77.2::50001::SOCKET"
+        assert attempts == ["TCPIP0::192.168.77.2::50000::SOCKET",
+                            "TCPIP0::192.168.77.2::50001::SOCKET"]
+    finally:
+        C.meas, C.dsp, C.Ametek7270, C._lockin_resource_from_config = saved[:4]
+        for m, (mm, md) in zip(mods, saved[4:]):
+            m.meas, m.dsp = mm, md
+
+
 def test_run_warns_loudly_when_lockin_is_offline():
     """If the app fell back to the OfflineLockin stub (lock-in unreachable at
     launch), a run 'works' but records exact zeros for every lock-in channel.

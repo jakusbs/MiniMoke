@@ -176,6 +176,10 @@ class PositionSweep(Procedure):
         # would "work" but record nothing.  Say so loudly in the run log (the
         # fallback itself happens at import time, before the GUI log exists).
         if not getattr(meas, "enabled", True):
+            from src.classes import try_revive_lockin
+            if try_revive_lockin() is not None:
+                log.info("Lock-in reconnected — continuing this run with the live instrument.")
+        if not getattr(meas, "enabled", True):
             log.warning("Lock-in is OFFLINE (it was not reachable when the app started) — "
                         "Voltage X/Y/R/theta will all be zero! Close the app, make sure the "
                         "lock-in is reachable (power-cycle it if a previous session crashed, "

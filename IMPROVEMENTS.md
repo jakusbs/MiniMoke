@@ -6,6 +6,19 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Lock-in "Ethernet refresh": auto-revive at run start, spare-port fallback,
+  clean disconnect on exit.** The 7270 accepts one Ethernet client per port; a
+  crashed session can leave its dead connection occupying port 50000, and the
+  next app launch then silently fell back to the offline stub (all-zero
+  channels) until the instrument was power-cycled — operationally no better
+  than USB. Three changes remove the power-cycle from the loop: (1) every AC
+  run start calls `try_revive_lockin()` — if the app is on the offline stub it
+  attempts a real connection and, on success, swaps the live driver in
+  everywhere, so recovery needs no app restart; (2) when a socket connect to
+  port 50000 is refused, the revive retries on the 7270's second command port
+  50001, which usually accepts even while a stale connection holds the primary;
+  (3) closing the app now closes the VISA session deliberately (clean TCP FIN),
+  so the instrument frees its slot and stale held sockets stop accumulating.
 - **Ethernet socket framing auto-sync (and stale-response flush).** The first
   Ethernet run (2026-07-15) desynchronised immediately: the 7270's socket
   interface appends a status-prompt chunk to every response that its USB

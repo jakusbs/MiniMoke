@@ -50,7 +50,14 @@ def _make_lockin():
     try:
         return Ametek7270(resource) if resource else Ametek7270()
     except Exception as err:
-        print(f"Lock-in (Ametek 7270) not found: {err}")
+        # This runs at import time, before the GUI log exists, so also warn via
+        # logging (console / any attached handler).  The procedures repeat this
+        # warning in the run log at every startup while the stub is active.
+        message = (f"Lock-in (Ametek 7270) not found at "
+                   f"'{resource or 'USB default'}': {err} — starting with the OFFLINE "
+                   f"stub; all lock-in channels will read zero.")
+        print(message)
+        log.warning(message)
         return OfflineLockin()
 
 

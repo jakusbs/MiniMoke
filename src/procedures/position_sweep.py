@@ -172,6 +172,15 @@ class PositionSweep(Procedure):
                              acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
                              modulation_amp=0.0)
 
+        # The offline stub returns exact zeros for every lock-in channel — a run
+        # would "work" but record nothing.  Say so loudly in the run log (the
+        # fallback itself happens at import time, before the GUI log exists).
+        if not getattr(meas, "enabled", True):
+            log.warning("Lock-in is OFFLINE (it was not reachable when the app started) — "
+                        "Voltage X/Y/R/theta will all be zero! Close the app, make sure the "
+                        "lock-in is reachable (power-cycle it if a previous session crashed, "
+                        "it only accepts one Ethernet connection), then start the app again.")
+
         # Single reference mode (REFMODE 0): one demodulator at the modulation
         # frequency, read as meas.x/y/mag/theta.  We deliberately do NOT use the
         # dual-harmonic mode (REFMODE 1): its second demodulator (the 2f channel)

@@ -1340,6 +1340,38 @@ def test_lockin_stays_in_sync_on_socket_interface_with_status_prompts():
     assert queue == [], "the XY. status chunk must be drained"
 
 
+def test_run_warns_loudly_when_lockin_is_offline():
+    """If the app fell back to the OfflineLockin stub (lock-in unreachable at
+    launch), a run 'works' but records exact zeros for every lock-in channel.
+    The construction-time fallback is only a console print (the GUI log doesn't
+    exist yet), so every run startup must repeat the warning in the run log."""
+    import logging
+    import src.procedures.position_sweep as ps
+    import src.procedures.x_sweep_proc as xp
+
+    _patch_proc_module(ps)              # meas -> OfflineLockin (enabled=False)
+
+    records = []
+    class Capture(logging.Handler):
+        def emit(self, record): records.append(record)
+    handler = Capture()
+    ps.log.addHandler(handler)
+    try:
+        p = xp.X_Sweep()
+        p.set_sample_name("t")
+        p.x_min, p.x_max, p.x_step = 0.0, 1.0, 1.0
+        p.y, p.b, p.repeat_num, p.acq_time = 0.0, 0.0, 1, 0.001
+        p.should_stop = lambda: False
+        p.startup()
+        p.shutdown()
+    finally:
+        ps.log.removeHandler(handler)
+
+    warned = [r for r in records if r.levelno >= logging.WARNING
+              and "OFFLINE" in r.getMessage()]
+    assert warned, "startup must warn in the run log when the lock-in is the offline stub"
+
+
 def test_failed_run_resets_controls_and_archives_like_finished():
     """pymeasure emits `failed` (never `finished`) when a worker crashes.  The
     window must handle it like a finished run — reset the controls and archive —

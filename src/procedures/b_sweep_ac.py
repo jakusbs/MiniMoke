@@ -223,6 +223,12 @@ class B_Sweep_Lockin(Procedure):
         # demodulator (2f) is unused here and would overload on the MOKE signal,
         # injecting spikes.  Set explicitly so the run never depends on whatever
         # mode the instrument was last left in.
+        if not getattr(meas, "enabled", True):
+            log.warning("Lock-in is OFFLINE (it was not reachable when the app started) — "
+                        "the lock-in channels will all be zero! Close the app, make sure the "
+                        "lock-in is reachable (power-cycle it if a previous session crashed, "
+                        "it only accepts one Ethernet connection), then start the app again.")
+
         dsp.set_reference_mode(0)
         dsp.setup_lockin_condition(
             lockin_voltage       = self.volt,

@@ -28,6 +28,7 @@ from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config
 from src.classes import live_readout
+from src.classes import run_control
 
 
 def read_signals(field_A) -> dict:
@@ -209,6 +210,30 @@ class PositionSweep(Procedure):
         data['Y Position (um)'] = pos_y_um()
         return data
 
+    def _pause_gate(self) -> bool:
+        """Hold here while a pause is requested (Pause button or hardware error).
+
+        Position, field and outputs stay exactly where they are.  Returns False
+        if the user aborted while paused (the caller then stops the sweep).
+        """
+        from src.classes.run_control import hold_while_paused
+        return hold_while_paused(self.should_stop, log) is not None
+
+    def _recover_hardware(self, field) -> None:
+        """Best-effort re-init after a device came back (e.g. a USB replug).
+
+        A removed USB device invalidates the DAQ tasks, so rebuild the
+        acquisition and re-assert the field before retrying the point.  The
+        lock-in recovers by itself (reconnect ladder in its driver).
+        """
+        try:
+            dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,
+                                 acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
+                                 modulation_amp=0.0)
+            dac.coils_output = field
+        except Exception as exc:   # noqa: BLE001 - retrying the point will re-report
+            log.warning(f"Hardware re-init after pause failed (will retry the point anyway): {exc}")
+
     def execute(self):
         """Walk the scan sequence, measuring one point at each step.
 
@@ -244,7 +269,30 @@ class PositionSweep(Procedure):
             if moved and settle > 0:
                 time.sleep(settle)
 
-            data = self._measure_point(item, iteration)
+            # Measure the point; on a hardware error (e.g. a USB/Ethernet
+            # device unplugged) PAUSE with everything held in place instead of
+            # killing the run, and retry the same point after Continue.
+            aborted = False
+            while True:
+                if not self._pause_gate():     # holds during pauses; False = abort
+                    aborted = True
+                    break
+                if getattr(self, "_needs_recovery", False):
+                    self._recover_hardware(item)   # after Continue following an error
+                    self._needs_recovery = False
+                try:
+                    data = self._measure_point(item, iteration)
+                    break
+                except Exception as exc:   # noqa: BLE001 - any device I/O failure
+                    log.error(f"Hardware error at point {done + 1}/{total}: {exc} — "
+                              f"measurement PAUSED (nothing is lost). Fix the "
+                              f"connection, then press Continue to retry this point, "
+                              f"or Abort to stop.")
+                    run_control.request_pause(auto=True)
+                    self._needs_recovery = True
+            if aborted:
+                break
+
             data['Loop'] = loop
             log.debug("Produced numbers: %s" % data)
             self.emit('results', data)

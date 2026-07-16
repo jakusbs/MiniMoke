@@ -177,6 +177,17 @@ class UIWindowBase(QtWidgets.QMainWindow):
         self.abort_button.setEnabled(False)
         self.abort_button.clicked.connect(self.abort)
 
+        # Pause/Continue: holds the running sweep after the current point
+        # (position, field and outputs stay in place).  The worker can also
+        # auto-pause on a hardware error, so the label/state is synced from a
+        # timer rather than only from clicks.
+        self.pause_button = QtWidgets.QPushButton('Pause', self)
+        self.pause_button.setEnabled(False)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self._pause_sync_timer = QtCore.QTimer(self)
+        self._pause_sync_timer.timeout.connect(self._sync_pause_button)
+        self._pause_sync_timer.start(500)
+
         self.browser_widget = BrowserWidget(
             self.procedure_class[0],
             self.displays,
@@ -385,6 +396,7 @@ class UIWindowBase(QtWidgets.QMainWindow):
 
         hbox = QtWidgets.QHBoxLayout()
         hbox.addWidget(self.queue_button)
+        hbox.addWidget(self.pause_button)
         hbox.addWidget(self.abort_button)
         footer_vbox.addLayout(hbox)
 
@@ -813,6 +825,31 @@ class UIWindowBase(QtWidgets.QMainWindow):
 
     def running(self, experiment):
         self.browser_widget.clear_button.setEnabled(False)
+        # Never carry a stale pause into a fresh run.
+        from src.classes import run_control
+        run_control.clear()
+
+    def toggle_pause(self):
+        from src.classes import run_control
+        if run_control.pause_requested:
+            run_control.clear()
+            log.info("Continue pressed — resuming the measurement.")
+        else:
+            run_control.request_pause()
+            log.info("Pause requested — the sweep will hold after the current point "
+                     "(position, field and outputs stay in place).")
+        self._sync_pause_button()
+
+    def _sync_pause_button(self):
+        from src.classes import run_control
+        try:
+            running = self.manager.is_running()
+        except Exception:
+            running = False
+        self.pause_button.setEnabled(running)
+        self.pause_button.setText("Continue" if run_control.pause_requested else "Pause")
+        if not running and run_control.pause_requested:
+            run_control.clear()   # run ended while paused — drop the stale request
 
     def abort_returned(self, experiment):
         if self.manager.experiments.has_next():

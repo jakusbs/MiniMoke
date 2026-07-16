@@ -11,6 +11,7 @@ from .longitudinal_stage_class import LongitudinalStage
 from .polar_stage_class import PolarStage
 from .ametek7270_class import Ametek7270, OfflineLockin
 from .live_readout import live_readout
+from .run_control import run_control
 
 dac         = DAC()
 hall_sensor = HallSensor()

@@ -346,6 +346,44 @@ class B_Sweep_Lockin(Procedure):
 
         return lockin_x, lockin_y, lockin_r, lockin_theta, voltage_dc, intensity, intensity_std, B_mT
 
+    def _gated_point(self, b_set, deadline):
+        """Pause gate + hardware-error retry around one field point.
+
+        Returns ``(held_seconds, row)`` — ``row`` is None when the user aborted
+        while paused.  ``held_seconds`` is the total time spent paused, which
+        the caller adds to the sweep's schedule anchor so the pacing resumes
+        cleanly instead of bursting through overdue points.  During a pause the
+        field and all outputs hold their current values.
+        """
+        from src.classes.run_control import run_control, hold_while_paused
+        held_total = 0.0
+        while True:
+            held = hold_while_paused(self.should_stop, log)
+            if held is None:
+                return held_total, None
+            held_total += held
+            if getattr(self, "_needs_recovery", False):
+                self._recover_hardware(b_set)
+                self._needs_recovery = False
+            try:
+                return held_total, self._measure_point(b_set, deadline + held_total)
+            except Exception as exc:   # noqa: BLE001 - any device I/O failure
+                log.error(f"Hardware error at field point B={b_set} A: {exc} — "
+                          f"measurement PAUSED (nothing is lost). Fix the "
+                          f"connection, then press Continue to retry, or Abort.")
+                run_control.request_pause(auto=True)
+                self._needs_recovery = True
+
+    def _recover_hardware(self, b_set):
+        """Best-effort re-init after a device came back (e.g. a USB replug)."""
+        try:
+            dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,
+                                 acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
+                                 modulation_amp=0.0)
+            dac.coils_output = b_set
+        except Exception as exc:   # noqa: BLE001 - retrying the point will re-report
+            log.warning(f"Hardware re-init after pause failed (will retry anyway): {exc}")
+
     # ── Execute ───────────────────────────────────────────────────────────────
 
     def execute(self):
@@ -382,8 +420,12 @@ class B_Sweep_Lockin(Procedure):
             # ── Forward branch: b_min → b_max ─────────────────────────────────
             for i, b_set in enumerate(self.b_forward):
                 deadline = sweep_start + (i * T_point)
+                held, row = self._gated_point(b_set, deadline)
+                sweep_start += held      # pauses defer the remaining schedule
+                if row is None:          # aborted while paused
+                    break
                 (lx, ly, lr, lt,
-                 vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
+                 vdc, inten, inten_std, B_mT) = row
 
                 sweep_fwd_dc[i] = vdc
                 sweep_fwd_x[i]  = lx
@@ -420,8 +462,12 @@ class B_Sweep_Lockin(Procedure):
             # ── Backward branch: b_max → b_min (skip shared b_max point) ──────
             for j, b_set in enumerate(self.b_backward[1:]):
                 deadline = sweep_start + ((n_fwd + j) * T_point)
+                held, row = self._gated_point(b_set, deadline)
+                sweep_start += held      # pauses defer the remaining schedule
+                if row is None:          # aborted while paused
+                    break
                 (lx, ly, lr, lt,
-                 vdc, inten, inten_std, B_mT) = self._measure_point(b_set, deadline)
+                 vdc, inten, inten_std, B_mT) = row
 
                 sweep_bwd_dc[j] = vdc
                 sweep_bwd_x[j]  = lx

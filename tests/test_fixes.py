@@ -1484,6 +1484,79 @@ def test_settle_time_waits_after_each_move():
     assert run(0.0) == [], "settle_time=0 must add no waits"
 
 
+def test_hardware_error_pauses_and_retries_instead_of_killing_the_run():
+    """A device dropping out mid-sweep (USB/Ethernet unplugged) must PAUSE the
+    run with everything held in place — not abort it — and retry the same point
+    after the operator presses Continue.  The manual Pause button uses the same
+    gate."""
+    import time as _time
+    from src.classes import run_control as rc
+    import src.procedures.position_sweep as ps
+    import src.procedures.y_sweep_proc as yp
+
+    fakes = _patch_proc_module(ps)
+
+    calls = {"n": 0}
+    real_read = fakes["dac"].read_data
+    def flaky_read(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:                       # second point: device vanished
+            raise RuntimeError("Device removed (-88708)")
+        return real_read(*a, **k)
+    fakes["dac"].read_data = flaky_read
+
+    p = yp.Y_Sweep()
+    p.set_sample_name("t")
+    p.y_min, p.y_max, p.y_step = 0.0, 2.0, 1.0    # 3 points x 2 field loops
+    p.x, p.b, p.repeat_num, p.acq_time, p.settle_time = 0.0, 0.0, 1, 0.001, 0.0
+    p.should_stop = lambda: False
+    results = []
+    p.emit = lambda topic, rec=None, **k: results.append(rec) if topic == "results" else None
+
+    rc.clear()
+    sleeps = {"n": 0}
+    saved_sleep = _time.sleep
+    def fake_sleep(s):
+        sleeps["n"] += 1
+        if rc.pause_requested and sleeps["n"] >= 3:
+            rc.clear()                # the operator presses Continue
+    _time.sleep = fake_sleep
+    try:
+        p.startup()
+        p.execute()
+    finally:
+        _time.sleep = saved_sleep
+        rc.clear()
+
+    assert len(results) == 6, f"expected all 6 points (failed one retried), got {len(results)}"
+    assert calls["n"] == 7, "6 good reads + the 1 failed attempt"
+    assert not rc.pause_requested
+
+
+def test_abort_while_paused_stops_the_sweep():
+    """Abort must break out of a paused sweep promptly (the pause gate checks
+    should_stop while holding)."""
+    from src.classes import run_control as rc
+    import src.procedures.position_sweep as ps
+    import src.procedures.y_sweep_proc as yp
+
+    _patch_proc_module(ps)
+    p = yp.Y_Sweep()
+    p.set_sample_name("t")
+    p.y_min, p.y_max, p.y_step = 0.0, 2.0, 1.0
+    p.x, p.b, p.repeat_num, p.acq_time, p.settle_time = 0.0, 0.0, 1, 0.001, 0.0
+    results = []
+    p.emit = lambda topic, rec=None, **k: results.append(rec) if topic == "results" else None
+    p.should_stop = lambda: True                  # user aborts during the pause
+    rc.request_pause()
+    try:
+        p.startup()
+        p.execute()
+    finally:
+        rc.clear()
+    assert results == [], "no points may be measured after aborting from a pause"
+
+
 def test_run_warns_loudly_when_lockin_is_offline():
     """If the app fell back to the OfflineLockin stub (lock-in unreachable at
     launch), a run 'works' but records exact zeros for every lock-in channel.

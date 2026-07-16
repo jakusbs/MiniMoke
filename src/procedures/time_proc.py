@@ -19,7 +19,7 @@ from pymeasure.experiment import Procedure, FloatParameter, Metadata
 from src.classes import active_stage as stage, dac, hall_sensor, log
 from src.classes import meas, dsp
 from src.classes import proc_config
-from .position_sweep import read_signals
+from .position_sweep import read_signals, DAC_SAMPLING_RATE
 
 
 class TimeMeasurement(Procedure):
@@ -116,14 +116,39 @@ class TimeMeasurement(Procedure):
         dac.coils_output = self.b       # field held constant
 
     def execute(self):
+        from src.classes.run_control import run_control, hold_while_paused
+
         log.info("Recording time trace...")
         n     = self._num_points
-        start = time.perf_counter()
+        start = time.perf_counter()     # truth for the 'Time (s)' column
+        pace  = start                   # pacing anchor — shifted by pauses
         for k in range(n):
-            t_point  = time.perf_counter() - start
-            deadline = start + (k + 1) * self.interval
+            # Pause gate + hardware-error retry: a pause holds everything in
+            # place and shows up as an honest gap in the recorded time axis,
+            # while the sampling interval resumes cleanly afterwards.
+            aborted = False
+            while True:
+                held = hold_while_paused(self.should_stop, log)
+                if held is None:
+                    aborted = True
+                    break
+                pace += held            # a pause defers the remaining schedule
+                if getattr(self, "_needs_recovery", False):
+                    self._recover_hardware()
+                    self._needs_recovery = False
+                try:
+                    t_point = time.perf_counter() - start
+                    data = read_signals(self.b)
+                    break
+                except Exception as exc:   # noqa: BLE001 - any device I/O failure
+                    log.error(f"Hardware error at point {k + 1}/{n}: {exc} — "
+                              f"measurement PAUSED (nothing is lost). Fix the "
+                              f"connection, then press Continue to retry, or Abort.")
+                    run_control.request_pause(auto=True)
+                    self._needs_recovery = True
+            if aborted:
+                break
 
-            data = read_signals(self.b)
             data['Time (s)'] = t_point
             self.emit('results', data)
             self.emit('progress', 100 * (k + 1) / n)
@@ -132,11 +157,22 @@ class TimeMeasurement(Procedure):
                 break
 
             # Keep the requested spacing between samples.
+            deadline  = pace + (k + 1) * self.interval
             remaining = deadline - time.perf_counter()
             if remaining > 0:
                 time.sleep(remaining)
 
         meas.shutdown()
+
+    def _recover_hardware(self):
+        """Best-effort re-init after a device came back (e.g. a USB replug)."""
+        try:
+            dac.setup_aquisition(modulation_channel="None", frequency=self.lockin_freq,
+                                 acquisition_time=self.acq_time, sampling_rate=DAC_SAMPLING_RATE,
+                                 modulation_amp=0.0)
+            dac.coils_output = self.b
+        except Exception as exc:   # noqa: BLE001 - retrying the point will re-report
+            log.warning(f"Hardware re-init after pause failed (will retry anyway): {exc}")
 
     def shutdown(self):
         log.info("Time trace done, turning off the outputs")

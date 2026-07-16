@@ -6,6 +6,20 @@ software works without them. Each notes *why* it's deferred so the context isn't
 lost.
 
 ## Done in this pass
+- **Pause/Continue for running sweeps; hardware errors pause instead of
+  killing the run.** A new Pause button (between Queue and Abort) holds the
+  running sweep after the current point — position, field and outputs stay in
+  place — and Continue resumes it; Abort still works while paused. The same
+  gate arms automatically: when a device drops out mid-run (DAQ USB unplugged,
+  lock-in Ethernet adapter disconnected and its reconnect ladder exhausted),
+  the run now PAUSES with a clear log message instead of failing — fix the
+  cable, press Continue, and the *same point* is retried after a best-effort
+  hardware re-init (the DAQ tasks are rebuilt, the field re-asserted; the
+  lock-in recovers via its own reconnect ladder). Nothing measured is lost.
+  Applies to X/Y/XY, Time (whose time axis keeps honest gaps while the
+  sampling interval resumes cleanly) and the AC B-sweep (whose per-point
+  schedule shifts by the pause). The DC B-sweep's fast hardware-timed loops
+  can't pause point-wise and keep their abort-on-error behaviour.
 - **Acquisition windows longer than 10 s no longer time out; per-point settle
   time.** nidaqmx defaults every `wait_until_done`/`read` timeout to 10 s, so an
   integration (acquisition) time above 10 s crashed the point — the DAC now
